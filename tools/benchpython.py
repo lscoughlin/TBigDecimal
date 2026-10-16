@@ -13,11 +13,23 @@ def digits(p, seed):
     return Decimal(d[0] + '.' + ''.join(d[1:]))
 
 
-def per_call(fn, reps):
-    t0 = time.perf_counter()
-    for _ in range(reps):
-        fn()
-    return (time.perf_counter() - t0) / reps * 1e6
+def per_call(fn):
+    reps = 1
+    while True:
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            fn()
+        t = time.perf_counter() - t0
+        if t >= 0.05:
+            break
+        reps *= 2
+    best = t / reps * 1e6
+    for _ in range(4):
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            fn()
+        best = min(best, (time.perf_counter() - t0) / reps * 1e6)
+    return best
 
 
 print('digits    multiply      divide        sqrt         exp          ln   (microseconds)')
@@ -26,12 +38,9 @@ for p in (34, 100, 300, 1000, 3000, 10000):
     ctx = Context(prec=p, rounding=ROUND_HALF_EVEN, Emax=decimal.MAX_EMAX, Emin=decimal.MIN_EMIN)
     x = digits(p, 1)
     y = digits(p, 2)
-    r1 = 20000000 // (p * p // 100 + 1) + 3
-    r2 = 4000 // (p + 1) + 2
-    r3 = 2 if p >= 3000 else 2000 // (p + 1) + 2
-    row = [per_call(lambda: ctx.multiply(x, y), r1),
-           per_call(lambda: ctx.divide(x, y), r1),
-           per_call(lambda: ctx.sqrt(x), r2),
-           per_call(lambda: ctx.exp(x), r3),
-           per_call(lambda: ctx.ln(x), r3)]
+    row = [per_call(lambda: ctx.multiply(x, y)),
+           per_call(lambda: ctx.divide(x, y)),
+           per_call(lambda: ctx.sqrt(x)),
+           per_call(lambda: ctx.exp(x)),
+           per_call(lambda: ctx.ln(x))]
     print('%6d' % p + ''.join('%12.2f' % v for v in row))

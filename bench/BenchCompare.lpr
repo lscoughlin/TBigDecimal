@@ -32,16 +32,50 @@ begin
   Result := Result[1] + '.' + Copy(Result, 2, P - 1);
 end;
 
-function PerCall(Reps: Integer; T0: Double): string;
+var
+  GX, GY, GZ: TBigDecimal;
+  GC: TMathContext;
+
+procedure RunOp(Op, Reps: Integer);
+var
+  I: Integer;
 begin
-  Result := Format('%12.2f', [(Secs - T0) / Reps * 1e6]);
+  case Op of
+    0: for I := 1 to Reps do GZ := GX.Multiply(GY, GC);
+    1: for I := 1 to Reps do GZ := GX.Divide(GY, GC);
+    2: for I := 1 to Reps do GZ := Sqrt(GX, GC);
+    3: for I := 1 to Reps do GZ := Exp(GX, GC);
+    4: for I := 1 to Reps do GZ := Ln(GX, GC);
+  end;
+end;
+
+{ Best of five trials of at least 50 ms, in microseconds per call. }
+function Measure(Op: Integer): string;
+var
+  T, Best: Double;
+  Trial, Reps: Integer;
+begin
+  Reps := 1;
+  repeat
+    T := Secs;
+    RunOp(Op, Reps);
+    T := Secs - T;
+    if T >= 0.05 then Break;
+    Reps *= 2;
+  until False;
+  Best := T / Reps * 1e6;
+  for Trial := 2 to 5 do
+  begin
+    T := Secs;
+    RunOp(Op, Reps);
+    T := (Secs - T) / Reps * 1e6;
+    if T < Best then Best := T;
+  end;
+  Result := Format('%12.2f', [Best]);
 end;
 
 var
-  P, Reps, I, K: Integer;
-  X, Y, Z: TBigDecimal;
-  C: TMathContext;
-  T: Double;
+  P, K, Op: Integer;
   Sizes: array of Integer;
 begin
   Sizes := [34, 100, 300, 1000, 3000, 10000];
@@ -49,28 +83,12 @@ begin
   for K := 0 to High(Sizes) do
   begin
     P := Sizes[K];
-    C := TMathContext.Make(P, rmHalfEven);
-    X := TBigDecimal.Create(Digits(P, 1));
-    Y := TBigDecimal.Create(Digits(P, 2));
+    GC := TMathContext.Make(P, rmHalfEven);
+    GX := TBigDecimal.Create(Digits(P, 1));
+    GY := TBigDecimal.Create(Digits(P, 2));
     Write(P: 6);
-    Reps := 20000000 div (P * P div 100 + 1) + 3;
-    T := Secs;
-    for I := 1 to Reps do Z := X.Multiply(Y, C);
-    Write(PerCall(Reps, T));
-    T := Secs;
-    for I := 1 to Reps do Z := X.Divide(Y, C);
-    Write(PerCall(Reps, T));
-    Reps := 4000 div (P + 1) + 2;
-    T := Secs;
-    for I := 1 to Reps do Z := Sqrt(X, C);
-    Write(PerCall(Reps, T));
-    Reps := 2000 div (P + 1) + 2;
-    if P >= 3000 then Reps := 2;
-    T := Secs;
-    for I := 1 to Reps do Z := Exp(X, C);
-    Write(PerCall(Reps, T));
-    T := Secs;
-    for I := 1 to Reps do Z := Ln(X, C);
-    WriteLn(PerCall(Reps, T));
+    for Op := 0 to 4 do
+      Write(Measure(Op));
+    WriteLn;
   end;
 end.

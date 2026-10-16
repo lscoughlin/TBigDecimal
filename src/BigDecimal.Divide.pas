@@ -25,7 +25,7 @@ var
   { Count of Newton divisions that fell back to Algorithm D (for tests). }
   NewtonFallbacks: Integer = 0;
   { Divisor size in limbs above which the Newton reciprocal path runs. }
-  NewtonDivThreshold: Integer = 1792;  // bench/RESULTS.md: Knuth wins up to 1536 limbs, Newton wins from 2048
+  NewtonDivThreshold: Integer = 4096;  // bench/RESULTS.md: Knuth wins up to 2048 limbs, tie at 4096
 
 { q := a div b, rem := a mod b. a and b are normalized, b is not empty.
   q needs na - nb + 1 limbs (at least 1), rem needs nb limbs.
@@ -48,6 +48,47 @@ implementation
 
 uses
   Math, BigDecimal.Multiply;
+
+{ u[0..nb] -= qhat * v[0..nb). Returns 1 when the result is negative (the top
+  limb u[nb] then holds the value plus the base). This is a separate routine
+  because FPC keeps the locals of a routine with a try block in memory; here
+  they stay in registers. The split of each product and the normalization of
+  each limb do not depend on the previous limb, so the dependent chain is one
+  subtraction, one compare and one masked addition, all without branches. }
+function MulSubRow(u, v: PLimb; nb: Integer; qhat: UInt64): Int64;
+var
+  i: Integer;
+  p, pq: UInt64;
+  t, x, borrow, carry, c1, c2, e: Int64;
+  lo: UInt32;
+begin
+  borrow := 0;
+  carry := 0;
+  for i := 0 to nb - 1 do
+  begin
+    p := qhat * v[i];
+    pq := p div LimbBase;
+    lo := UInt32(p - pq * LimbBase);
+    // x does not depend on the borrow: bring it into 0..LimbBase-1 and count
+    // the borrowed bases in c1 + c2
+    x := Int64(u[i]) - lo - carry;
+    carry := Int64(pq);
+    c1 := Ord(x < 0);
+    x += c1 * Int64(LimbBase);
+    c2 := Ord(x < 0);
+    x += c2 * Int64(LimbBase);
+    // the chain: one subtraction, one compare, one masked add
+    t := x - borrow;
+    e := Ord(t < 0);
+    t += (-e) and Int64(LimbBase);
+    borrow := c1 + c2 + e;
+    u[i] := UInt32(t);
+  end;
+  t := Int64(u[nb]) - carry - borrow;
+  if t < 0 then begin t += LimbBase; borrow := 1; end else borrow := 0;
+  u[nb] := UInt32(t);
+  Result := borrow;
+end;
 
 procedure DivRemKnuth(a: PLimb; na: Integer; b: PLimb; nb: Integer;
   q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
@@ -122,27 +163,7 @@ begin
         rhat += vt;
         if rhat >= LimbBase then Break;
       end;
-      // multiply and subtract. The split of each product does not depend on
-      // the previous limb, so only the borrow forms a dependent chain, and the
-      // borrow is computed without branches.
-      borrow := 0;
-      carry := 0;
-      for i := 0 to nb - 1 do
-      begin
-        p := qhat * v[i];
-        pq := DivMod1e9(p, lo);
-        t := Int64(u[i + j]) - lo - carry - borrow;
-        carry := Int64(pq);
-        b1 := Ord(t < 0);
-        t += b1 * Int64(LimbBase);
-        b2 := Ord(t < 0);
-        t += b2 * Int64(LimbBase);
-        borrow := b1 + b2;
-        u[i + j] := UInt32(t);
-      end;
-      t := Int64(u[j + nb]) - carry - borrow;
-      if t < 0 then begin t += LimbBase; borrow := 1; end else borrow := 0;
-      u[j + nb] := UInt32(t);
+      borrow := MulSubRow(u + j, v, nb, qhat);
       if borrow <> 0 then
       begin
         // add back

@@ -28,54 +28,67 @@ Squaring calls the column-order kernel with equal operands. The row-order
 squaring kernel that computes each cross product once took 1.6 to 1.8 times as
 long (22.1 µs against 12.3 µs at 128 limbs).
 
-Karatsuba against schoolbook (alternating best-of-15 trials, machine under
-load): about even from 128 to 160 limbs, 15% faster at 256, 1.4 times faster at
-512, 2.2 times at 1024. `KaratsubaThreshold = 160`.
+Karatsuba against schoolbook (alternating best-of-15 trials): schoolbook wins
+up to 144 limbs, Karatsuba wins by 17% at 160, 1.2 times at 192, 1.8 times at
+512, 2 times at 1024. `KaratsubaThreshold = 160`.
 
 ## Division (2n limbs by n limbs)
 
-The Knuth multiply-and-subtract loop splits each product without a dependency
-on the previous limb and computes the borrow without branches. It takes about
-0.6 times as long as the loop that carries the split through the chain.
-Newton division wins from about 2000 limbs (31 ms against 34 ms at 2048 limbs,
-94 ms against 143 ms at 4096 limbs). `NewtonDivThreshold = 1792`.
+The Knuth multiply-and-subtract loop is a separate routine, because FPC keeps
+the locals of a routine with a `try` block in memory (8.0 ns per limb step
+inside such a routine, 3.6 ns as a separate routine with a short chain, 1.8 ns
+after the normalization of each limb moved off the borrow chain). Knuth
+division at 128 limbs takes 46 µs. Newton division is slower up to 2048 limbs
+and ties at 4096 (30.5 ms against 29.5 ms). `NewtonDivThreshold = 4096`.
 
 ## Python decimal (libmpdec 4.0.1)
 
 `bench/BenchCompare.lpr` and `tools/benchpython.py` time the same operations on
-the same operands. The cells hold the best of three runs, in microseconds. The
-machine was under load for both programs.
+the same operands. Each cell is the best of five trials of at least 50 ms, in
+microseconds. The machine was under load for both programs.
 
 | digits | operation | TBigDecimal | Python | ratio |
 |-------:|-----------|------------:|-------:|------:|
-| 34 | multiply | 0.35 | 0.12 | 2.9 |
-| 34 | divide | 0.84 | 0.21 | 4.0 |
-| 34 | sqrt | 8.6 | 2.0 | 4.4 |
-| 34 | exp | 33.9 | 10.9 | 3.1 |
-| 34 | ln | 33.9 | 25.6 | 1.3 |
-| 300 | multiply | 1.9 | 1.1 | 1.8 |
-| 300 | divide | 13.6 | 2.4 | 5.6 |
-| 300 | sqrt | 66.7 | 35.6 | 1.9 |
-| 300 | exp | 125 | 330 | 0.38 |
-| 300 | ln | 500 | 446 | 1.1 |
-| 1000 | multiply | 16.0 | 13.3 | 1.2 |
-| 1000 | divide | 117 | 20.7 | 5.6 |
-| 1000 | sqrt | 400 | 337 | 1.2 |
-| 1000 | exp | 1333 | 6754 | 0.20 |
-| 1000 | ln | 7000 | 8170 | 0.86 |
-| 3000 | multiply | 84 | 122 | 0.69 |
-| 3000 | divide | 991 | 168 | 5.9 |
-| 3000 | sqrt | 3667 | 2858 | 1.3 |
-| 3000 | exp | 19000 | 353730 | 0.05 |
-| 3000 | ln | 102000 | 389897 | 0.26 |
-| 10000 | multiply | 682 | 480 | 1.4 |
-| 10000 | divide | 10591 | 1713 | 6.2 |
-| 10000 | sqrt | 39500 | 30841 | 1.3 |
-| 10000 | exp | 386000 | 1959349 | 0.20 |
-| 10000 | ln | 1974000 | 4665585 | 0.42 |
+| 34 | multiply | 0.19 | 0.12 | 1.58 |
+| 34 | divide | 0.33 | 0.20 | 1.65 |
+| 34 | sqrt | 8.54 | 1.58 | 5.41 |
+| 34 | exp | 16 | 9.23 | 1.72 |
+| 34 | ln | 23 | 22 | 1.06 |
+| 100 | multiply | 0.35 | 0.22 | 1.59 |
+| 100 | divide | 0.98 | 0.50 | 1.96 |
+| 100 | sqrt | 18 | 6.04 | 2.99 |
+| 100 | exp | 37 | 22 | 1.66 |
+| 100 | ln | 55 | 53 | 1.04 |
+| 300 | multiply | 1.37 | 0.94 | 1.46 |
+| 300 | divide | 4.46 | 2.10 | 2.12 |
+| 300 | sqrt | 38 | 30 | 1.27 |
+| 300 | exp | 129 | 272 | 0.47 |
+| 300 | ln | 191 | 338 | 0.57 |
+| 1000 | multiply | 11 | 11 | 1.04 |
+| 1000 | divide | 38 | 17 | 2.20 |
+| 1000 | sqrt | 178 | 274 | 0.65 |
+| 1000 | exp | 1078 | 5497 | 0.20 |
+| 1000 | ln | 2375 | 6779 | 0.35 |
+| 3000 | multiply | 64 | 100 | 0.64 |
+| 3000 | divide | 625 | 143 | 4.38 |
+| 3000 | sqrt | 2219 | 3268 | 0.68 |
+| 3000 | exp | 14750 | 343771 | 0.04 |
+| 3000 | ln | 52000 | 349099 | 0.15 |
+| 10000 | multiply | 523 | 438 | 1.19 |
+| 10000 | divide | 4625 | 1532 | 3.02 |
+| 10000 | sqrt | 18500 | 27055 | 0.68 |
+| 10000 | exp | 295000 | 1950829 | 0.15 |
+| 10000 | ln | 1262001 | 4746390 | 0.27 |
 
-Division is the slowest operation relative to libmpdec. libmpdec uses 10^19
-limbs, which need a quarter of the limb pairs.
+Division is the slowest operation relative to libmpdec (1.7 to 4.4 times).
+libmpdec uses 10^19 limbs, which need a quarter of the limb pairs, and its
+Newton division runs above the sizes where this library still uses Knuth.
+
+## Build profiles
+
+FPC does not rebuild a unit when only the compiler options change. The
+Makefile keeps one unit directory for each profile (`lib/debug`, `lib/release`,
+`lib/heap`) so that a benchmark never links objects from a debug build.
 
 ## Factorial and binomial
 
@@ -86,22 +99,20 @@ multiplicative form kept for n above 4,000,000 where the sieve is too large.
 
 ## Functions (microseconds per call)
 
-The machine was under load for this table.
-
 | digits | sqrt | exp | ln | pow(x, y) | sin | gamma(7.5) |
 |-------:|-----:|----:|---:|----------:|----:|-----------:|
-| 16 | 8 | 30 | 30 | 80 | 34 | 203 |
-| 34 | 9 | 35 | 43 | 95 | 43 | 319 |
-| 100 | 24 | 49 | 98 | 171 | 98 | 1220 |
-| 300 | 133 | 200 | 400 | 800 | 400 | 13467 |
-| 1000 | 400 | 3200 | 8000 | 11600 | 4800 | 1693400 |
+| 16 | 4 | 21 | 17 | 55 | 21 | 127 |
+| 34 | 9 | 26 | 26 | 60 | 26 | 198 |
+| 100 | 18 | 49 | 49 | 98 | 49 | 634 |
+| 300 | 67 | 67 | 200 | 400 | 200 | 5867 |
+| 1000 | 200 | 1000 | 2800 | 3800 | 1400 | 758200 |
 
 ## Small values (bench/BenchSmall.lpr)
 
-Add 70 to 90 ns, multiply 60 to 80 ns (the machine load changes these numbers).
+Add 80 to 90 ns, multiply 70 to 80 ns (the machine load changes these numbers).
 A counting memory manager sees zero allocations in 1000 additions,
 subtractions, multiplications and comparisons of small values. The read of the
-thread-local default context costs 2.6 to 3.8 ns. With a default context of 16
+thread-local default context costs 1.4 to 3.8 ns. With a default context of 16
 or 34 digits, the times for values with no more digits than the precision are
 equal to the times without a default context.
 

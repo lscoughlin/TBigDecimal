@@ -160,11 +160,13 @@ round the result.
   `10^9 / 2`. The quotient digit estimate uses the top two dividend limbs and
   the top divisor limb. A second-limb check removes almost all wrong
   estimates. One add-back step handles the rare remaining case. The
-  multiply-and-subtract loop splits each product `qhat · v[i]` into a limb part
-  and a carry without a dependency on the previous limb. Only the borrow forms a
-  dependent chain, and the code computes it without branches.
+  multiply-and-subtract loop is a separate routine without a `try` block, so
+  FPC keeps its locals in registers. It splits each product `qhat · v[i]` into a
+  limb part and a carry, and normalizes each limb, without a dependency on the
+  previous limb. The dependent chain is one subtraction, one compare and one
+  masked addition, with no branches. A step costs about 1.8 ns.
 - **Large operands.** When the divisor and the quotient both have at least
-  `NewtonDivThreshold` (1792) limbs, division uses a Newton reciprocal followed
+  `NewtonDivThreshold` (4096) limbs, division uses a Newton reciprocal followed
   by a multiply and a correction step. It runs in O(M(n)). GMP and other
   libraries use the same method
   ([Möller and Granlund, "Improved division by invariant integers"](https://www.lysator.liu.se/~nisse/archive/draft-division-paper.pdf)).
@@ -980,9 +982,9 @@ overlap.
   `Pi`, and bit-burst evaluation of `Exp` and `Ln` would give O(M(p) log² p)
   at high precision. The library evaluates these series in fixed point at
   O(p²).
-- **Faster division.** Division is 4 to 6 times slower than Python `decimal`
-  (`bench/RESULTS.md`). A Knuth inner loop with a faster split of the product
-  by 10^9, or a Burnikel-Ziegler recursion, would reduce the gap.
+- **Faster division.** Division is 1.7 to 4.4 times slower than Python
+  `decimal` (`bench/RESULTS.md`). A Burnikel-Ziegler recursion, or a division
+  in 10^18 limbs with 128-bit products, would reduce the gap.
 - **Reciprocal-root square root.** A Newton iteration for `1/sqrt(x)` needs
   only multiplications and avoids the divisions of the integer iteration.
 - **Other targets.** Builds and runs on x86_64, Linux and Windows. The
@@ -1002,15 +1004,15 @@ Measurements are in `bench/RESULTS.md` (Apple Silicon aarch64, FPC
   Cases with NaN, infinity, exponent limits or negative zero are skipped and
   counted (about 30% of the cases). No dectest case is on the
   expected-failure list.
-- **Thresholds.** Karatsuba from 160 limbs, Newton division from 1792 limbs,
+- **Thresholds.** Karatsuba from 160 limbs, Newton division from 4096 limbs,
   swing factorial from 600, Kummer binomial from k = 13.
 - **Small values.** A small-value `+`, `-` or `*` allocates no memory. The
   read of the thread-local default context costs about 3 ns. A default context
   adds no measurable time when the value has no more digits than the
   precision.
 - **Python `decimal`.** Ratios of the library time to the Python time (libmpdec
-  4.0.1) at 34 to 10,000 digits: multiply 0.7 to 2.9, divide 4 to 6, `Sqrt` 1.2
-  to 7, `Exp` 0.05 to 3, `Ln` 0.3 to 1.6.
+  4.0.1) at 34 to 10,000 digits: multiply 0.6 to 1.6, divide 1.7 to 4.4, `Sqrt`
+  0.65 to 5.4, `Exp` 0.04 to 1.7, `Ln` 0.15 to 1.1.
 - **Limits.** Constants and the elementary functions cost O(w²) limb operations
   at w digits, so precisions of many thousands of digits are slow
   (`Gamma(7.5)` takes about 1.1 s at 1000 digits). The `Gamma` function takes a

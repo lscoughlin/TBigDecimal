@@ -1,8 +1,9 @@
 # TBigDecimal build file
 FPC      ?= fpc
-COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FUlib -FEbin
-DEBUG    = $(COMMON) -g -gl -Cr -Co -Ct -O1
-RELEASE  = $(COMMON) -O3
+COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FEbin
+# each profile has its own unit directory: FPC does not rebuild a unit when only the options change
+DEBUG    = $(COMMON) -FUlib/debug -g -gl -Cr -Co -Ct -O1
+RELEASE  = $(COMMON) -FUlib/release -O3
 
 .PHONY: test bench benchsmall benchcompare clean refs vectors heaptest
 
@@ -13,23 +14,23 @@ vectors:
 	@test -f tests/vectors/add.txt || (sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000)
 
 test: refs vectors
-	@mkdir -p lib bin
+	@mkdir -p lib/debug bin
 	$(FPC) $(DEBUG) tests/RunTests.lpr
 	./bin/RunTests --all --format=plain
 
 bench:
-	@mkdir -p lib bin
+	@mkdir -p lib/release bin
 	$(FPC) $(RELEASE) bench/BenchAll.lpr
 	./bin/BenchAll
 
 benchsmall:
-	@mkdir -p lib bin
+	@mkdir -p lib/release bin
 	$(FPC) $(RELEASE) bench/BenchSmall.lpr
 	./bin/BenchSmall
 
 # Prints timings for the operations that tools/benchpython.py times in Python.
 benchcompare:
-	@mkdir -p lib bin
+	@mkdir -p lib/release bin
 	$(FPC) $(RELEASE) bench/BenchCompare.lpr
 	./bin/BenchCompare
 	python3 -W ignore tools/benchpython.py
