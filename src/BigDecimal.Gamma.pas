@@ -34,7 +34,7 @@ function TangentNumber(K: Integer): TBigDecimal;
 implementation
 
 uses
-  Math, BigDecimal.Fixed, BigDecimal.Constants, BigDecimal.Math, BigDecimal.Trig,
+  Math, BigDecimal.Fixed, BigDecimal.Constants, BigDecimal.Elementary, BigDecimal.Trig,
   BigDecimal.Combinatorics;
 
 var

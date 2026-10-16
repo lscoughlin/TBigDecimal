@@ -63,6 +63,63 @@ function IntDigits(const X: TBigDecimal): Integer;
 
 implementation
 
+uses
+  BigDecimal.Multiply, BigDecimal.Rounding;
+
+{ Truncating product of two values at scale W, in stack buffers. Returns False
+  when the operands are too long or the product scale is below W. R holds no
+  array yet. The routine has no managed local. }
+function TryMulTrunc(const A, B: TBigDecimal; W: Integer; var R: TBigDecimal): Boolean;
+var
+  va, vb: TMagView;
+  prod, tr: array[0..MaxStackLimbs] of TLimb;
+  n, nr: Integer;
+  sp, drop: Int64;
+  inexact: Boolean;
+begin
+  Result := False;
+  GetMagView(A, va);
+  GetMagView(B, vb);
+  if (va.N = 0) or (vb.N = 0) or (va.N + vb.N > MaxStackLimbs) then Exit;
+  sp := Int64(A.Scale) + B.Scale;
+  if sp < W then Exit;
+  n := MulMag(va.P, va.N, vb.P, vb.N, @prod[0]);
+  drop := sp - W;
+  if drop = 0 then
+    PutFromPtr(R, va.Neg <> vb.Neg, @prod[0], n, W)
+  else
+  begin
+    if MagDigits(@prod[0], n) <= drop then
+    begin
+      PutFromPtr(R, False, nil, 0, W);
+      Result := True;
+      Exit;
+    end;
+    RoundMagDrop(@prod[0], n, drop, rmDown, va.Neg <> vb.Neg, False, @tr[0], nr, inexact);
+    PutFromPtr(R, va.Neg <> vb.Neg, @tr[0], nr, W);
+  end;
+  Result := True;
+end;
+
+{ A divided by a positive D below 2^32, truncated, at the scale of A (which is
+  W). Returns False when it does not apply. R holds no array yet. }
+function TryDivSmallTrunc(const A: TBigDecimal; D: Int64; W: Integer;
+  var R: TBigDecimal): Boolean;
+var
+  va: TMagView;
+  q: array[0..MaxStackLimbs] of TLimb;
+  nq: Integer;
+begin
+  Result := False;
+  if (D <= 0) or (D >= Int64(1) shl 32) or (A.Scale <> W) then Exit;
+  GetMagView(A, va);
+  if (va.N = 0) or (va.N > MaxStackLimbs) then Exit;
+  DivSmall(va.P, va.N, UInt32(D), @q[0]);
+  nq := NormLen(@q[0], va.N);
+  PutFromPtr(R, va.Neg, @q[0], nq, W);
+  Result := True;
+end;
+
 function ApproxAbs(const X: TBigDecimal): Double;
 var
   v: TMagView;
@@ -137,7 +194,8 @@ begin
   ma := ApproxAbs(A.V);
   mb := ApproxAbs(B.V);
   Result.W := A.W;
-  Result.V := (A.V * B.V).SetScale(A.W, rmDown);
+  if not TryMulTrunc(A.V, B.V, A.W, Result.V) then
+    Result.V := (A.V * B.V).SetScale(A.W, rmDown);
   Result.E := (ma * B.E + mb * A.E + 1.0) * 1.0000001;
 end;
 
@@ -147,7 +205,8 @@ var
 begin
   ma := ApproxAbs(A.V);
   Result.W := A.W;
-  Result.V := A.V.Square.SetScale(A.W, rmDown);
+  if not TryMulTrunc(A.V, A.V, A.W, Result.V) then
+    Result.V := A.V.Square.SetScale(A.W, rmDown);
   Result.E := (2 * ma * A.E + 1.0) * 1.0000001;
 end;
 
@@ -161,7 +220,11 @@ end;
 function FxDivInt(const A: TFx; D: Int64): TFx;
 begin
   Result.W := A.W;
-  Result.V := A.V.Divide(TBigDecimal.Create(D), A.W, rmDown);
+  if (D > 0) and TryDivSmallTrunc(A.V, D, A.W, Result.V) then
+  else if (D < 0) and TryDivSmallTrunc(A.V, -D, A.W, Result.V) then
+    Result.V := -Result.V
+  else
+    Result.V := A.V.Divide(TBigDecimal.Create(D), A.W, rmDown);
   Result.E := A.E / Abs(D) + 1.0;
 end;
 

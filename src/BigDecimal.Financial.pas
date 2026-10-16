@@ -40,7 +40,7 @@ function AnnualizedRate(const Ratio, Periods: TBigDecimal): TBigDecimal;
 implementation
 
 uses
-  BigDecimal.Math;
+  BigDecimal.Elementary;
 
 function Work(const C: TMathContext): TMathContext;
 begin

@@ -19,7 +19,7 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry, BigDecimal.Types, BigDecimal
-  {$ifdef MATH}, BigDecimal.Math{$endif};
+  {$ifdef MATH}, BigDecimal.Elementary{$endif};
 
 type
   TDecTests = class(TTestCase)

@@ -59,7 +59,7 @@ function LnFactorialApprox(N: Double): Double;
 implementation
 
 uses
-  Math, BigDecimal.Math;
+  Math, BigDecimal.Elementary;
 
 const
   SmallFactorials: array[0..20] of UInt64 = (

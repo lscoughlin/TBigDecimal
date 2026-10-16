@@ -13,7 +13,7 @@ unit TestVectors;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry, BigDecimal.Types, BigDecimal, BigDecimal.Math, BigDecimal.Trig,
+  Classes, SysUtils, fpcunit, testregistry, BigDecimal.Types, BigDecimal, BigDecimal.Elementary, BigDecimal.Trig,
   BigDecimal.Combinatorics, BigDecimal.Gamma;
 
 type

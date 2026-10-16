@@ -40,6 +40,12 @@ procedure DivRemKnuth(a: PLimb; na: Integer; b: PLimb; nb: Integer;
 { Approximate reciprocal B^(2n) / D of a normalized n-limb divisor (tests). }
 procedure Reciprocal(D: PLimb; n: Integer; Y: PLimb; out ny: Integer);
 
+{ y := floor(sqrt(n)) for a normalized magnitude of nn limbs (1 <= nn <= 48).
+  y needs nn div 2 + 2 limbs. Returns the normalized length of y, or 0 when
+  the checked result is not the floor of the root (the caller then uses
+  another method). Exact is True when y * y = n. }
+function ISqrtMag(n: PLimb; nn: Integer; y: PLimb; out Exact: Boolean): Integer;
+
 { Newton reciprocal division only, for tests and benchmarks. }
 procedure DivRemNewton(a: PLimb; na: Integer; b: PLimb; nb: Integer;
   q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
@@ -48,6 +54,80 @@ implementation
 
 uses
   Math, BigDecimal.Multiply;
+
+const
+  { Dividends up to this many limbs use stack scratch in DivRemKnuth. }
+  SmallScratch = 96;
+
+function ISqrtMag(n: PLimb; nn: Integer; y: PLimb; out Exact: Boolean): Integer;
+var
+  q, rem, z, sq: array[0..64] of TLimb;
+  hi: UInt64;
+  m, sv: Double;
+  s: UInt64;
+  e, h, ny, nq, nr, nz, i, c: Integer;
+begin
+  Exact := False;
+  Result := 0;
+  if (nn < 1) or (nn > 48) then Exit;
+  // start value above the root, from the top two limbs
+  if nn = 1 then
+  begin
+    hi := n[0];
+    e := 0;
+  end
+  else
+  begin
+    hi := UInt64(n[nn - 1]) * LimbBase + n[nn - 2];
+    e := nn - 2;
+  end;
+  m := Double(hi) + 1.0;
+  if (e and 1) = 1 then
+  begin
+    m := m * 1e9;
+    Dec(e);
+  end;
+  sv := Sqrt(m) * (1.0 + 1e-13) + 2.0;
+  s := Trunc(sv);
+  h := e div 2;
+  for i := 0 to h - 1 do y[i] := 0;
+  y[h] := UInt32(s mod LimbBase);
+  s := s div LimbBase;
+  if s <> 0 then
+  begin
+    y[h + 1] := UInt32(s);
+    ny := h + 2;
+  end
+  else
+    ny := h + 1;
+  ny := NormLen(y, ny);
+  repeat
+    DivRemMag(n, nn, y, ny, @q[0], nq, @rem[0], nr);
+    if nq = 0 then Break;
+    nz := AddMag(y, ny, @q[0], nq, @z[0]);
+    DivSmall(@z[0], nz, 2, @z[0]);
+    nz := NormLen(@z[0], nz);
+    if CmpMag(@z[0], nz, y, ny) >= 0 then Break;
+    for i := 0 to nz - 1 do y[i] := z[i];
+    ny := nz;
+  until False;
+  // check y*y <= n < (y+1)*(y+1)
+  nz := MulMag(y, ny, y, ny, @sq[0]);
+  c := CmpMag(@sq[0], nz, n, nn);
+  if c > 0 then Exit;
+  Exact := c = 0;
+  if not Exact then
+  begin
+    // (y+1)^2 = y^2 + 2y + 1
+    nq := MulSmall(y, ny, 2, @q[0]);
+    q[nq] := 0;
+    nq := AddMag(@sq[0], nz, @q[0], nq, @z[0]);
+    q[0] := 1;
+    nz := AddMag(@z[0], nq, @q[0], 1, @sq[0]);
+    if CmpMag(@sq[0], nz, n, nn) <= 0 then Exit;
+  end;
+  Result := ny;
+end;
 
 { u[0..nb] -= qhat * v[0..nb). Returns 1 when the result is negative (the top
   limb u[nb] then holds the value plus the base). This is a separate routine
@@ -90,10 +170,11 @@ begin
   Result := borrow;
 end;
 
-procedure DivRemKnuth(a: PLimb; na: Integer; b: PLimb; nb: Integer;
-  q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
+{ Knuth algorithm D on the scratch buffers u (na + 1 limbs) and v (nb limbs).
+  The routine has no try block, so FPC keeps its locals in registers. }
+procedure DivRemKnuthCore(a: PLimb; na: Integer; b: PLimb; nb: Integer;
+  q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer; u, v: PLimb);
 var
-  u, v: PLimb;
   d: UInt32;
   j, i, k: Integer;
   qhat, rhat, num, p, pq: UInt64;
@@ -102,6 +183,84 @@ var
   lo: UInt32;
   vt, vs: UInt64;
   nu: Integer;
+begin
+  d := UInt32(LimbBase div (UInt64(b[nb - 1]) + 1));
+  if d = 1 then
+  begin
+    for i := 0 to na - 1 do u[i] := a[i];
+    u[na] := 0;
+    for i := 0 to nb - 1 do v[i] := b[i];
+  end
+  else
+  begin
+    // u := a * d, v := b * d (v keeps nb limbs: the top carry is zero)
+    carry := 0;
+    for i := 0 to na - 1 do
+    begin
+      p := UInt64(a[i]) * d + UInt64(carry);
+      carry := DivMod1e9(p, lo);
+      u[i] := lo;
+    end;
+    u[na] := UInt32(carry);
+    carry := 0;
+    for i := 0 to nb - 1 do
+    begin
+      p := UInt64(b[i]) * d + UInt64(carry);
+      carry := DivMod1e9(p, lo);
+      v[i] := lo;
+    end;
+  end;
+  nu := na + 1;
+  vt := v[nb - 1];
+  vs := v[nb - 2];
+  for j := na - nb downto 0 do
+  begin
+    num := UInt64(u[j + nb]) * LimbBase + u[j + nb - 1];
+    qhat := num div vt;
+    rhat := num - qhat * vt;
+    while (qhat >= LimbBase) or
+          (qhat * vs > rhat * LimbBase + u[j + nb - 2]) do
+    begin
+      Dec(qhat);
+      rhat += vt;
+      if rhat >= LimbBase then Break;
+    end;
+    borrow := MulSubRow(u + j, v, nb, qhat);
+    if borrow <> 0 then
+    begin
+      // add back
+      Dec(qhat);
+      carry := 0;
+      for i := 0 to nb - 1 do
+      begin
+        t := Int64(u[i + j]) + v[i] + carry;
+        if t >= LimbBase then begin t -= LimbBase; carry := 1; end else carry := 0;
+        u[i + j] := UInt32(t);
+      end;
+      t := Int64(u[j + nb]) + carry;
+      if t >= LimbBase then t -= LimbBase;
+      u[j + nb] := UInt32(t);
+    end;
+    q[j] := UInt32(qhat);
+  end;
+  nq := NormLen(q, na - nb + 1);
+  // remainder = u[0..nb) / d
+  if d = 1 then
+    for i := 0 to nb - 1 do rem[i] := u[i]
+  else
+    DivSmall(u, nb, d, rem);
+  nr := NormLen(rem, nb);
+
+end;
+
+procedure DivRemKnuth(a: PLimb; na: Integer; b: PLimb; nb: Integer;
+  q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
+var
+  u, v: PLimb;
+  ub: array[0..SmallScratch] of TLimb;
+  vb: array[0..SmallScratch] of TLimb;
+  lo: UInt32;
+  i: Integer;
 begin
   if CmpMag(a, na, b, nb) < 0 then
   begin
@@ -119,78 +278,18 @@ begin
     if lo = 0 then nr := 0 else nr := 1;
     Exit;
   end;
-  GetMem(u, (na + 1) * SizeOf(TLimb));
-  GetMem(v, nb * SizeOf(TLimb));
-  try
-    d := UInt32(LimbBase div (UInt64(b[nb - 1]) + 1));
-    if d = 1 then
-    begin
-      for i := 0 to na - 1 do u[i] := a[i];
-      u[na] := 0;
-      for i := 0 to nb - 1 do v[i] := b[i];
-    end
-    else
-    begin
-      // u := a * d, v := b * d (v keeps nb limbs: the top carry is zero)
-      carry := 0;
-      for i := 0 to na - 1 do
-      begin
-        p := UInt64(a[i]) * d + UInt64(carry);
-        carry := DivMod1e9(p, lo);
-        u[i] := lo;
-      end;
-      u[na] := UInt32(carry);
-      carry := 0;
-      for i := 0 to nb - 1 do
-      begin
-        p := UInt64(b[i]) * d + UInt64(carry);
-        carry := DivMod1e9(p, lo);
-        v[i] := lo;
-      end;
+  if na <= SmallScratch then
+    DivRemKnuthCore(a, na, b, nb, q, nq, rem, nr, @ub[0], @vb[0])
+  else
+  begin
+    GetMem(u, (na + 1) * SizeOf(TLimb));
+    GetMem(v, nb * SizeOf(TLimb));
+    try
+      DivRemKnuthCore(a, na, b, nb, q, nq, rem, nr, u, v);
+    finally
+      FreeMem(u);
+      FreeMem(v);
     end;
-    nu := na + 1;
-    vt := v[nb - 1];
-    vs := v[nb - 2];
-    for j := na - nb downto 0 do
-    begin
-      num := UInt64(u[j + nb]) * LimbBase + u[j + nb - 1];
-      qhat := num div vt;
-      rhat := num - qhat * vt;
-      while (qhat >= LimbBase) or
-            (qhat * vs > rhat * LimbBase + u[j + nb - 2]) do
-      begin
-        Dec(qhat);
-        rhat += vt;
-        if rhat >= LimbBase then Break;
-      end;
-      borrow := MulSubRow(u + j, v, nb, qhat);
-      if borrow <> 0 then
-      begin
-        // add back
-        Dec(qhat);
-        carry := 0;
-        for i := 0 to nb - 1 do
-        begin
-          t := Int64(u[i + j]) + v[i] + carry;
-          if t >= LimbBase then begin t -= LimbBase; carry := 1; end else carry := 0;
-          u[i + j] := UInt32(t);
-        end;
-        t := Int64(u[j + nb]) + carry;
-        if t >= LimbBase then t -= LimbBase;
-        u[j + nb] := UInt32(t);
-      end;
-      q[j] := UInt32(qhat);
-    end;
-    nq := NormLen(q, na - nb + 1);
-    // remainder = u[0..nb) / d
-    if d = 1 then
-      for i := 0 to nb - 1 do rem[i] := u[i]
-    else
-      DivSmall(u, nb, d, rem);
-    nr := NormLen(rem, nb);
-  finally
-    FreeMem(u);
-    FreeMem(v);
   end;
 end;
 

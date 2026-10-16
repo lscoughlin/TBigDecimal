@@ -10,7 +10,7 @@ notes:
   - a function without a context argument reads the thread-local default context
 ---
 }
-unit BigDecimal.Math;
+unit BigDecimal.Elementary;
 
 {$mode objfpc}{$H+}
 {$coperators on}
@@ -41,6 +41,10 @@ function Pow(const X, Y: TBigDecimal): TBigDecimal; overload;
   the result would exceed MaxExactDigits digits. }
 function PowExact(const X: TBigDecimal; N: Int64): TBigDecimal;
 
+var
+  { False makes Sqrt use the general path only (for tests). }
+  SqrtFastPath: Boolean = True;
+
 { Floor of the K-th root of a non-negative integer (scale 0). }
 function IRootFloor(const N: TBigDecimal; K: Integer): TBigDecimal;
 
@@ -56,7 +60,7 @@ function RequireContext(out C: TMathContext): TMathContext;
 implementation
 
 uses
-  Math, BigDecimal.Constants;
+  Math, BigDecimal.Constants, BigDecimal.Limbs, BigDecimal.Divide, BigDecimal.Multiply;
 
 function RequireContext(out C: TMathContext): TMathContext;
 begin
@@ -231,12 +235,50 @@ begin
   Result := r2.Round(C);
 end;
 
+{ Square root of a short, non-negative value in stack buffers, rounded once.
+  Returns False when it does not apply: zero, a result that is exact (the
+  general path pads it to the preferred scale), an unlimited context, or
+  operands beyond the buffers. R holds no array yet. The routine has no
+  managed local, so it needs no finalization. }
+function TrySqrtFast(const X: TBigDecimal; const C: TMathContext;
+  var R: TBigDecimal): Boolean;
+var
+  v: TMagView;
+  nbuf, ybuf: array[0..MaxStackLimbs + 2] of TLimb;
+  s, rscale: Int64;
+  p, d, t, nn, ny, sm: Integer;
+  exact, inexact: Boolean;
+begin
+  Result := False;
+  p := C.Precision;
+  if (p <= 0) or X.IsZero or (X.Sign < 0) then Exit;
+  GetMagView(X, v);
+  s := X.Scale;
+  sm := Integer(((-s) mod 2 + 2) mod 2);
+  d := Integer(MagDigits(v.P, v.N)) + sm;
+  t := (2 * (p + 1) + 1 - d + 1) div 2;
+  if t < 0 then t := 0;
+  // the scaled value has d + 2t digits
+  if (d + 2 * t) div LimbDigits + 3 > MaxStackLimbs then Exit;
+  nn := MulPow10(v.P, v.N, sm + 2 * t, @nbuf[0]);
+  ny := ISqrtMag(@nbuf[0], nn, @ybuf[0], exact);
+  if (ny = 0) or exact then Exit;
+  s += sm;
+  rscale := s div 2 + t;
+  // inexact: append a sticky digit 1 so that every mode sees a value above the root
+  ny := MulSmall(@ybuf[0], ny, 10, @nbuf[0]);
+  nbuf[0] += 1;
+  PutRounded(R, False, @nbuf[0], ny, rscale + 1, C, False, inexact);
+  Result := True;
+end;
+
 function Sqrt(const X: TBigDecimal; const C: TMathContext): TBigDecimal;
 var
   GDefaultGuard: TSuspendDefault;
 begin
   GDefaultGuard.Suspend;
   if X.Sign < 0 then raise EBigDecimalDomain.Create('square root of a negative value');
+  if SqrtFastPath and TrySqrtFast(X, C, Result) then Exit;
   Result := RootCore(X, 2, C);
 end;
 

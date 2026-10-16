@@ -10,3 +10,6 @@ tools/.venv/
 tests/vectors/
 ppas.sh
 link*.res
+lazarus/TBigDecimal.pas
+lazarus/*.lps
+lazarus/backup/

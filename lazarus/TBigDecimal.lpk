@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="5">
+    <Name Value="TBigDecimal"/>
+    <Type Value="RunTime"/>
+    <Author Value="Liam Seamus Coughlin"/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <SearchPaths>
+        <OtherUnitFiles Value="../src"/>
+        <UnitOutputDirectory Value="../lib/lazarus/$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+      <Parsing>
+        <SyntaxOptions>
+          <SyntaxMode Value="ObjFPC"/>
+          <CStyleOperator Value="True"/>
+          <AllowLabel Value="True"/>
+          <CPPInline Value="True"/>
+          <UseAnsiStrings Value="True"/>
+        </SyntaxOptions>
+      </Parsing>
+      <CodeGeneration>
+        <Optimizations>
+          <OptimizationLevel Value="3"/>
+        </Optimizations>
+      </CodeGeneration>
+    </CompilerOptions>
+    <Description Value="Arbitrary-precision decimal arithmetic: the TBigDecimal record with rounding modes, a thread-local default context, Sqrt, Exp, Ln, Pow, trigonometry, combinatorics, Gamma and financial helpers."/>
+    <License Value="LGPL-2.1-only WITH Independent-modules-exception"/>
+    <Version Major="0" Minor="2"/>
+    <Files Count="14">
+      <Item1>
+        <Filename Value="../src/BigDecimal.pas"/>
+        <UnitName Value="BigDecimal"/>
+      </Item1>
+      <Item2>
+        <Filename Value="../src/BigDecimal.Types.pas"/>
+        <UnitName Value="BigDecimal.Types"/>
+      </Item2>
+      <Item3>
+        <Filename Value="../src/BigDecimal.Limbs.pas"/>
+        <UnitName Value="BigDecimal.Limbs"/>
+      </Item3>
+      <Item4>
+        <Filename Value="../src/BigDecimal.Multiply.pas"/>
+        <UnitName Value="BigDecimal.Multiply"/>
+      </Item4>
+      <Item5>
+        <Filename Value="../src/BigDecimal.Divide.pas"/>
+        <UnitName Value="BigDecimal.Divide"/>
+      </Item5>
+      <Item6>
+        <Filename Value="../src/BigDecimal.Rounding.pas"/>
+        <UnitName Value="BigDecimal.Rounding"/>
+      </Item6>
+      <Item7>
+        <Filename Value="../src/BigDecimal.Convert.pas"/>
+        <UnitName Value="BigDecimal.Convert"/>
+      </Item7>
+      <Item8>
+        <Filename Value="../src/BigDecimal.Fixed.pas"/>
+        <UnitName Value="BigDecimal.Fixed"/>
+      </Item8>
+      <Item9>
+        <Filename Value="../src/BigDecimal.Constants.pas"/>
+        <UnitName Value="BigDecimal.Constants"/>
+      </Item9>
+      <Item10>
+        <Filename Value="../src/BigDecimal.Elementary.pas"/>
+        <UnitName Value="BigDecimal.Elementary"/>
+      </Item10>
+      <Item11>
+        <Filename Value="../src/BigDecimal.Trig.pas"/>
+        <UnitName Value="BigDecimal.Trig"/>
+      </Item11>
+      <Item12>
+        <Filename Value="../src/BigDecimal.Combinatorics.pas"/>
+        <UnitName Value="BigDecimal.Combinatorics"/>
+      </Item12>
+      <Item13>
+        <Filename Value="../src/BigDecimal.Gamma.pas"/>
+        <UnitName Value="BigDecimal.Gamma"/>
+      </Item13>
+      <Item14>
+        <Filename Value="../src/BigDecimal.Financial.pas"/>
+        <UnitName Value="BigDecimal.Financial"/>
+      </Item14>
+    </Files>
+    <RequiredPkgs Count="1">
+      <Item1>
+        <PackageName Value="FCL"/>
+      </Item1>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+      <UseFileFilters Value="True"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>

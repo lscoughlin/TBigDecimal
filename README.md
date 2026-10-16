@@ -1,7 +1,8 @@
 # TBigDecimal
 
 TBigDecimal is an arbitrary-precision decimal math library for Object Pascal.
-It targets Free Pascal (FPC). It exposes the `TBigDecimal` type.
+It targets Free Pascal (FPC). It exposes the `TBigDecimal` type. The current
+version is 0.2.0 (`BigDecimalVersion` in unit `BigDecimal.Types`).
 
 `TBigDecimal` is an advanced record. It follows the Java `BigDecimal` type
 in its model and its names. A value is an unscaled integer of any size and a
@@ -97,7 +98,7 @@ and `*` are exact, and `/` is exact or raises.
   casts to `Double` and `string`.
 - Default context: `TMathContext.SetDefault`, `ClearDefault`, `Default`,
   `HasDefault`, and `TMathContextScope`.
-- Functions (unit `BigDecimal.Math`): `Sqrt`, `Root`, `Exp`, `Ln`, `Log10`,
+- Functions (unit `BigDecimal.Elementary`): `Sqrt`, `Root`, `Exp`, `Ln`, `Log10`,
   `Log`, `Pow` (integer and decimal exponent), `PowExact`. Unit
   `BigDecimal.Trig`: `Sin`, `Cos`, `Tan`. Unit `BigDecimal.Constants`:
   `BigPi`, `BigE`, `BigLn2`, `BigLn10`. Every function has a form with a
@@ -121,6 +122,13 @@ make benchcompare  # timings next to Python decimal
 sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000
 ```
 
+Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.2.0)
+holds the library units. The projects `RunTests.lpi` (modes Release and Debug),
+`BenchAll.lpi` and `BenchCompare.lpi` require the package. `lazbuild` builds
+them, for example `lazbuild lazarus/TBigDecimal.lpk` and
+`lazbuild lazarus/RunTests.lpi`. The binaries go to `bin/`, and the test
+binary runs from the project root, where `tests/refs` and `tests/vectors` are.
+
 `make test` needs the vector files that `tools/genvectors.py` writes. The
 generator needs Python 3 with `mpmath`.
 
@@ -128,7 +136,9 @@ generator needs Python 3 with `mpmath`.
 
 The design is in [`doc/design.md`](doc/design.md). Usage examples are in
 [`doc/usage.md`](doc/usage.md). Benchmark results are in
-[`bench/RESULTS.md`](bench/RESULTS.md).
+[`bench/RESULTS.md`](bench/RESULTS.md). Faults of FPC 3.2.4 management operators
+that limit the record layout are in
+[`doc/management-operators.md`](doc/management-operators.md).
 
 ## Original API sketch
 

@@ -65,7 +65,7 @@ with a context argument gives the same result with and without a default.
 ## Functions
 
 ```pascal
-uses BigDecimal.Math, BigDecimal.Trig, BigDecimal.Constants, BigDecimal.Gamma;
+uses BigDecimal.Elementary, BigDecimal.Trig, BigDecimal.Constants, BigDecimal.Gamma;
 
 c := TMathContext.Make(50, rmHalfEven);
 Sqrt(TBigDecimal.Create(2), c);

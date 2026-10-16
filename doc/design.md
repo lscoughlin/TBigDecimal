@@ -90,6 +90,21 @@ The research on FPC behavior gives these points
   not depend on the previous limb where possible (the column-order multiply
   of section 3.2 and the multiply-and-subtract step of section 3.3). The
   dependent chain is then one addition or one borrow.
+- **Short operands.** Addition, subtraction, multiplication, division with a
+  context and rounding work in stack buffers when the operands and the result
+  have at most `MaxStackLimbs` (48) limbs. The routines that do this
+  (`TryAddFast`, `TryMulFast`, `TryDivideFast`, `PutRounded`) have no managed
+  local variable, because FPC keeps the locals of a routine with a try block
+  in memory and runs initialization and finalization code at each entry and
+  exit. A result needs at most one allocation. The rounding to a context reads
+  the stack buffer, so the product or sum does not exist as a `TBigDecimal`
+  before it is rounded. Larger operands use the general paths.
+- **Record layout.** `TBigDecimal` holds a dynamic array for the limbs. FPC
+  initializes, copies and finalizes such a record through run-time type
+  information, which costs about 30 ns for each result record. A record with a
+  pointer to a reference counted block and management operators would avoid
+  that cost, but FPC 3.2.4 does not call the management operators as documented
+  (`doc/management-operators.md`), so the library does not use them.
 - Scratch buffers for Karatsuba and Newton iteration are allocated once per
   top-level call and passed down. Recursive calls never allocate.
 
@@ -321,7 +336,7 @@ Rules:
 - Methods whose meaning does not involve a precision ignore the default:
   comparison, `Abs`, `Negate`, `SetScale` (it has explicit scale and mode),
   `ToString`, parsing and conversion. `Create` never rounds.
-- Library internals never read the default. The code in `BigDecimal.Math`
+- Library internals never read the default. The code in `BigDecimal.Elementary`
   and `BigDecimal.Constants` calls the kernels and the explicit-context
   routines, so a caller's default context cannot change the working
   precision of an internal step. The cached constants (`Pi`, `E`, `Ln2`,
@@ -421,6 +436,13 @@ digits. When the root is exact, the result has the preferred scale
 `ceil(scale / k)` if it fits in `p` digits. Each Newton step costs one
 division (section 3.3). A reciprocal-root iteration that needs only
 multiplications is not used (section 10).
+
+For a short, non-exact result (at most 48 limbs after scaling) the code runs
+the same algorithm on stack limbs. The start value comes from a `Double` square
+root of the top two limbs, widened to stay above the root. Newton steps with
+limb division follow, and a check that `y² ≤ n < (y+1)²` confirms the floor.
+The rounding appends the sticky digit to the limbs and rounds once. Results that
+are exact, and unlimited contexts, use the general path above.
 
 ### 5.3 Exp
 
@@ -792,7 +814,7 @@ seasonal terms and wave models in financial code. They do not speed up
 ## 6. API conventions
 
 - The record is `TBigDecimal`. The main unit is `BigDecimal`. A separate unit,
-  `BigDecimal.Math`, holds the transcendental functions. A program that does
+  `BigDecimal.Elementary`, holds the transcendental functions. A program that does
   only arithmetic does not link the function code.
 - `Implicit` conversion from `Integer` and `Int64` only. A conversion from
   `Double` is `Explicit`, because a silent `Double` conversion hides binary
@@ -810,6 +832,13 @@ seasonal terms and wave models in financial code. They do not speed up
 
 Each file stays below 2000 lines.
 
+The unit names under `BigDecimal.` differ from the names of RTL units. FPC
+searches the namespace of the current unit first, so a `uses Math` clause in
+`BigDecimal.Divide` finds a unit `BigDecimal.Math` before the RTL unit `Math`.
+Which unit wins then depends on the compile order, and a build can fail with a
+circular reference. The elementary functions therefore live in
+`BigDecimal.Elementary`.
+
 | Unit                     | Content |
 |--------------------------|---------|
 | `BigDecimal.Types`       | Enums, `TMathContext`, exception classes, constants (power-of-ten tables) |
@@ -820,7 +849,7 @@ Each file stays below 2000 lines.
 | `BigDecimal.Convert`     | Parse, digit text, exact and correctly rounded `Double` conversion on raw limbs |
 | `BigDecimal`             | The `TBigDecimal` record and its operators |
 | `BigDecimal.Fixed`       | Fixed-point values with a running error bound; the Ziv interval check |
-| `BigDecimal.Math`        | `Sqrt`, `Exp`, `Ln`, `Log10`, `Log`, `Pow`, `Root` |
+| `BigDecimal.Elementary`  | `Sqrt`, `Exp`, `Ln`, `Log10`, `Log`, `Pow`, `Root` |
 | `BigDecimal.Constants`   | `Pi`, `E`, `Ln2`, `Ln10` with caches |
 | `BigDecimal.Financial`   | Financial helpers |
 | `BigDecimal.Combinatorics` | Factorial, double factorial, primorial, falling and rising factorial, binomial, multinomial, Catalan, prime sieve |
@@ -982,7 +1011,7 @@ overlap.
   `Pi`, and bit-burst evaluation of `Exp` and `Ln` would give O(M(p) log² p)
   at high precision. The library evaluates these series in fixed point at
   O(p²).
-- **Faster division.** Division is 1.7 to 4.4 times slower than Python
+- **Faster division.** Division is 1.7 to 2.5 times slower than Python
   `decimal` (`bench/RESULTS.md`). A Burnikel-Ziegler recursion, or a division
   in 10^18 limbs with 128-bit products, would reduce the gap.
 - **Reciprocal-root square root.** A Newton iteration for `1/sqrt(x)` needs
@@ -1011,8 +1040,8 @@ Measurements are in `bench/RESULTS.md` (Apple Silicon aarch64, FPC
   adds no measurable time when the value has no more digits than the
   precision.
 - **Python `decimal`.** Ratios of the library time to the Python time (libmpdec
-  4.0.1) at 34 to 10,000 digits: multiply 0.6 to 1.6, divide 1.7 to 4.4, `Sqrt`
-  0.65 to 5.4, `Exp` 0.04 to 1.7, `Ln` 0.15 to 1.1.
+  4.0.1) at 34 to 10,000 digits: multiply 0.6 to 1.9, divide 1.7 to 2.5, `Sqrt`
+  0.37 to 1.5, `Exp` 0.05 to 1.5, `Ln` 0.14 to 1.1.
 - **Limits.** Constants and the elementary functions cost O(w²) limb operations
   at w digits, so precisions of many thousands of digits are slow
   (`Gamma(7.5)` takes about 1.1 s at 1000 digits). The `Gamma` function takes a

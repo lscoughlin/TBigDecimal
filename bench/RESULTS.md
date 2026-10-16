@@ -44,45 +44,74 @@ and ties at 4096 (30.5 ms against 29.5 ms). `NewtonDivThreshold = 4096`.
 ## Python decimal (libmpdec 4.0.1)
 
 `bench/BenchCompare.lpr` and `tools/benchpython.py` time the same operations on
-the same operands. Each cell is the best of five trials of at least 50 ms, in
-microseconds. The machine was under load for both programs.
+the same operands. Each cell is the best of two runs of five trials of at
+least 50 ms, in microseconds. The machine was under load for both programs.
 
 | digits | operation | TBigDecimal | Python | ratio |
 |-------:|-----------|------------:|-------:|------:|
-| 34 | multiply | 0.19 | 0.12 | 1.58 |
-| 34 | divide | 0.33 | 0.20 | 1.65 |
-| 34 | sqrt | 8.54 | 1.58 | 5.41 |
-| 34 | exp | 16 | 9.23 | 1.72 |
-| 34 | ln | 23 | 22 | 1.06 |
+| 34 | multiply | 0.19 | 0.11 | 1.73 |
+| 34 | divide | 0.43 | 0.19 | 2.26 |
+| 34 | sqrt | 1.08 | 1.49 | 0.72 |
+| 34 | exp | 14 | 9.26 | 1.48 |
+| 34 | ln | 25 | 22 | 1.12 |
 | 100 | multiply | 0.35 | 0.22 | 1.59 |
-| 100 | divide | 0.98 | 0.50 | 1.96 |
-| 100 | sqrt | 18 | 6.04 | 2.99 |
-| 100 | exp | 37 | 22 | 1.66 |
-| 100 | ln | 55 | 53 | 1.04 |
-| 300 | multiply | 1.37 | 0.94 | 1.46 |
-| 300 | divide | 4.46 | 2.10 | 2.12 |
-| 300 | sqrt | 38 | 30 | 1.27 |
-| 300 | exp | 129 | 272 | 0.47 |
-| 300 | ln | 191 | 338 | 0.57 |
-| 1000 | multiply | 11 | 11 | 1.04 |
-| 1000 | divide | 38 | 17 | 2.20 |
-| 1000 | sqrt | 178 | 274 | 0.65 |
-| 1000 | exp | 1078 | 5497 | 0.20 |
-| 1000 | ln | 2375 | 6779 | 0.35 |
-| 3000 | multiply | 64 | 100 | 0.64 |
-| 3000 | divide | 625 | 143 | 4.38 |
-| 3000 | sqrt | 2219 | 3268 | 0.68 |
-| 3000 | exp | 14750 | 343771 | 0.04 |
-| 3000 | ln | 52000 | 349099 | 0.15 |
-| 10000 | multiply | 523 | 438 | 1.19 |
-| 10000 | divide | 4625 | 1532 | 3.02 |
-| 10000 | sqrt | 18500 | 27055 | 0.68 |
-| 10000 | exp | 295000 | 1950829 | 0.15 |
-| 10000 | ln | 1262001 | 4746390 | 0.27 |
+| 100 | divide | 1.05 | 0.48 | 2.19 |
+| 100 | sqrt | 4.64 | 5.77 | 0.80 |
+| 100 | exp | 27 | 20 | 1.39 |
+| 100 | ln | 43 | 49 | 0.87 |
+| 300 | multiply | 1.83 | 0.95 | 1.93 |
+| 300 | divide | 5.13 | 2.09 | 2.45 |
+| 300 | sqrt | 46 | 30 | 1.52 |
+| 300 | exp | 178 | 304 | 0.59 |
+| 300 | ln | 203 | 409 | 0.50 |
+| 1000 | multiply | 14 | 12 | 1.14 |
+| 1000 | divide | 43 | 20 | 2.20 |
+| 1000 | sqrt | 211 | 336 | 0.63 |
+| 1000 | exp | 1281 | 6751 | 0.19 |
+| 1000 | ln | 2875 | 8150 | 0.35 |
+| 3000 | multiply | 73 | 121 | 0.60 |
+| 3000 | divide | 293 | 168 | 1.75 |
+| 3000 | sqrt | 1234 | 2865 | 0.43 |
+| 3000 | exp | 16500 | 366547 | 0.05 |
+| 3000 | ln | 58000 | 411703 | 0.14 |
+| 10000 | multiply | 562 | 552 | 1.02 |
+| 10000 | divide | 3125 | 1794 | 1.74 |
+| 10000 | sqrt | 12250 | 33348 | 0.37 |
+| 10000 | exp | 342000 | 2020689 | 0.17 |
+| 10000 | ln | 1215000 | 4685930 | 0.26 |
 
-Division is the slowest operation relative to libmpdec (1.7 to 4.4 times).
-libmpdec uses 10^19 limbs, which need a quarter of the limb pairs, and its
-Newton division runs above the sizes where this library still uses Knuth.
+Division is the slowest operation relative to libmpdec (1.7 to 2.5 times).
+libmpdec uses 10^19 limbs, which need a quarter of the limb pairs.
+
+## Small operands
+
+Results of up to 48 limbs (432 digits) are formed in stack buffers, and the
+rounding to a context reads those buffers. A result then needs one allocation.
+`Sqrt` of a short value runs on stack limbs (`ISqrtMag`), and the fixed-point
+multiply, square and small division of the series code use stack buffers.
+Before this change a 34-digit multiply made about three allocations, and
+`Sqrt` 11.8 µs; after it, `Sqrt` takes 0.8 to 1.1 µs.
+
+`make profile` samples each 34-digit operation for 3 seconds. After the change
+the top entries of the add, exp and ln profiles are `fpc_initialize`,
+`fpc_finalize`, `fpc_copy` and the record RTTI routine (about half of the
+samples); the multiply profile is led by the schoolbook kernel, and the divide
+profile by the Knuth multiply-and-subtract routine.
+
+## Allocators
+
+| Allocator | Result |
+|-----------|--------|
+| FPC default heap | baseline |
+| `cmem` (C `malloc`) | equal within noise from 34 to 300 digits; 10 to 25% faster from 3000 digits |
+| FastMM5 | not usable: it supports Delphi only, and its GPL 3 license conflicts with the library license |
+| Arena allocator | not built: a 34-digit operation makes one allocation, so an arena would save at most the cost of that allocation |
+
+The cost that remains is the runtime handling of a record with a dynamic
+array, not the allocator. A record with a pointer and management operators
+measured 4.7 times faster in a micro-benchmark (38.6 ns against 8.2 ns for
+`Z := Add(X, Y)`), but FPC 3.2.4 does not call the management operators as
+documented, so the layout is not usable (`doc/management-operators.md`).
 
 ## Build profiles
 

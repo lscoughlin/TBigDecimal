@@ -5,7 +5,7 @@ COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FEbin
 DEBUG    = $(COMMON) -FUlib/debug -g -gl -Cr -Co -Ct -O1
 RELEASE  = $(COMMON) -FUlib/release -O3
 
-.PHONY: test bench benchsmall benchcompare clean refs vectors heaptest
+.PHONY: test bench benchsmall benchcompare profile clean refs vectors heaptest
 
 refs:
 	sh tools/fetchrefs.sh
@@ -34,6 +34,19 @@ benchcompare:
 	$(FPC) $(RELEASE) bench/BenchCompare.lpr
 	./bin/BenchCompare
 	python3 -W ignore tools/benchpython.py
+
+# Samples each 34-digit operation for 3 seconds and prints the top frames.
+# Needs the macOS `sample` tool.
+profile:
+	@mkdir -p lib/profile bin
+	$(FPC) $(COMMON) -FUlib/profile -O3 -g bench/ProfileSmall.lpr
+	@for op in m d a s e l; do \
+	  ./bin/ProfileSmall $$op > /dev/null & \
+	  sleep 1; sample ProfileSmall 3 -file bin/profile-$$op.txt > /dev/null 2>&1; \
+	  echo "== operation $$op"; \
+	  grep -A12 'Sort by top of stack' bin/profile-$$op.txt | tail -12 | cut -c1-110; \
+	  kill $$! 2>/dev/null; wait 2>/dev/null; \
+	done
 
 clean:
 	rm -rf lib bin

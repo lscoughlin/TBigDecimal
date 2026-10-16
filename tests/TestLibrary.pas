@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry, BigDecimal.Types, BigDecimal,
-  BigDecimal.Math, BigDecimal.Trig, BigDecimal.Constants,
+  BigDecimal.Elementary, BigDecimal.Trig, BigDecimal.Constants,
   BigDecimal.Combinatorics, BigDecimal.Gamma, BigDecimal.Financial;
 
 type
@@ -53,6 +53,9 @@ type
     procedure TestFallingFactorial;
     procedure TestSinCosIdentity;
     procedure TestHighPrecisionRoundTrip;
+    procedure TestVersion;
+    procedure TestSqrtFastPathEqualsGeneral;
+    procedure TestStackPathBoundaries;
     procedure TestExpLnRoundTrip;
     procedure TestPowSquare;
     procedure TestTangentNumbers;
@@ -594,6 +597,85 @@ begin
   y := Sin(x, w).Square + Cos(x, w).Square;
   d := (y - TBigDecimal.One).Abs;
   AssertTrue('sin and cos agree', d.CompareTo(TBigDecimal.Create(1, 3000)) < 0);
+end;
+
+procedure TLibraryTests.TestVersion;
+begin
+  AssertEquals('0.2.0', BigDecimalVersion);
+  AssertEquals('0.2.0', Format('%d.%d.%d', [BigDecimalVersionMajor,
+    BigDecimalVersionMinor, BigDecimalVersionRelease]));
+end;
+
+procedure TLibraryTests.TestSqrtFastPathEqualsGeneral;
+var
+  i, j, nd: Integer;
+  t: string;
+  x, fast, slow: TBigDecimal;
+  c: TMathContext;
+  m: TRoundingMode;
+begin
+  RandSeed := 4242;
+  for i := 1 to 3000 do
+  begin
+    nd := 1 + Random(70);
+    t := Chr(Ord('1') + Random(9));
+    for j := 2 to nd do t += Chr(Ord('0') + Random(10));
+    if i mod 7 = 0 then t := '1' + StringOfChar('0', nd);
+    if i mod 11 = 0 then t := t + t;
+    x := TBigDecimal.Create(TBigDecimal.Create(t), Random(60) - 10);
+    for m := rmUp to rmHalfEven do
+    begin
+      c := TMathContext.Make(1 + Random(50), m);
+      SqrtFastPath := True;
+      fast := Sqrt(x, c);
+      SqrtFastPath := False;
+      slow := Sqrt(x, c);
+      SqrtFastPath := True;
+      AssertTrue('sqrt ' + x.ToString + ' p=' + IntToStr(c.Precision) + ': ' +
+        fast.ToString + ' <> ' + slow.ToString, fast.Identical(slow));
+    end;
+  end;
+end;
+
+procedure TLibraryTests.TestStackPathBoundaries;
+var
+  i, j, nda, ndb, sca, scb: Integer;
+  ta, tb: string;
+  a, b, sum, prod, q, q2: TBigDecimal;
+  c: TMathContext;
+  m: TRoundingMode;
+begin
+  // operand sizes around the limit of the stack buffers (48 limbs, 432 digits)
+  RandSeed := 777;
+  for i := 1 to 600 do
+  begin
+    nda := 150 + Random(300);
+    ndb := 150 + Random(300);
+    ta := Chr(Ord('1') + Random(9));
+    for j := 2 to nda do ta += Chr(Ord('0') + Random(10));
+    tb := Chr(Ord('1') + Random(9));
+    for j := 2 to ndb do tb += Chr(Ord('0') + Random(10));
+    sca := Random(120) - 40;
+    scb := Random(120) - 40;
+    a := TBigDecimal.Create(TBigDecimal.Create(ta), sca);
+    b := TBigDecimal.Create(TBigDecimal.Create(tb), scb);
+    if i mod 3 = 0 then b := -b;
+    sum := a + b;
+    AssertTrue('sum minus b', (sum - b).CompareTo(a) = 0);
+    prod := a * b;
+    AssertTrue('product over b', prod.Divide(b).CompareTo(a) = 0);
+    for m := rmUp to rmHalfEven do
+    begin
+      c := TMathContext.Make(1 + Random(450), m);
+      q := a.Divide(b, c);
+      q2 := a.Divide(b, q.Scale, m);
+      AssertTrue('divide ' + IntToStr(i) + ' p=' + IntToStr(c.Precision),
+        q.CompareTo(q2) = 0);
+      AssertTrue('multiply rounds once',
+        a.Multiply(b, c).CompareTo(prod.Round(c)) = 0);
+      AssertTrue('add rounds once', a.Add(b, c).CompareTo(sum.Round(c)) = 0);
+    end;
+  end;
 end;
 
 procedure TLibraryTests.TestPowSquare;

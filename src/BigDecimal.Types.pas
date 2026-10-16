@@ -75,6 +75,13 @@ type
   end;
 
 const
+  { Version of the library (major.minor.release). The Lazarus package
+    lazarus/TBigDecimal.lpk carries the same number. }
+  BigDecimalVersion = '0.2.0';
+  BigDecimalVersionMajor = 0;
+  BigDecimalVersionMinor = 2;
+  BigDecimalVersionRelease = 0;
+
   Decimal32: TMathContext = (Precision: 7; RoundingMode: rmHalfEven);
   Decimal64: TMathContext = (Precision: 16; RoundingMode: rmHalfEven);
   Decimal128: TMathContext = (Precision: 34; RoundingMode: rmHalfEven);

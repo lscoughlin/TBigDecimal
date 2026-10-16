@@ -130,7 +130,20 @@ type
     Buf: array[0..2] of TLimb;
   end;
 
+const
+  { Magnitudes up to this many limbs use stack buffers in the arithmetic. }
+  MaxStackLimbs = 48;
+
 procedure GetMagView(const X: TBigDecimal; var V: TMagView);
+{ Stores a value built from the magnitude at P (not consumed) in R, which holds
+  no array yet. At most one allocation. }
+procedure PutFromPtr(var R: TBigDecimal; Neg: Boolean; P: PLimb; n: Integer; Scale: Int64);
+{ Rounds the magnitude at P (N limbs, N at most MaxStackLimbs, scale Scale) to
+  the context (precision above zero) and stores the value in R, which holds no
+  array yet. Sticky tells that a non-zero part lies below the magnitude.
+  Inexact tells that the result differs from the exact value. }
+procedure PutRounded(var R: TBigDecimal; Neg: Boolean; P: PLimb; N: Integer;
+  Scale: Int64; const C: TMathContext; Sticky: Boolean; out Inexact: Boolean);
 { Builds a value from a magnitude. L is trimmed to n limbs and is consumed. }
 function MakeFromMag(Neg: Boolean; var L: TLimbs; n: Integer; Scale: Int64): TBigDecimal;
 { Product of an unscaled magnitude view with 10^k, as a limb array. }
@@ -237,6 +250,101 @@ begin
   if V < 0 then Result.FSign := -1
   else if V > 0 then Result.FSign := 1
   else Result.FSign := 0;
+end;
+
+type
+  PMathContext = ^TMathContext;
+
+
+{ Stores a value built from the magnitude at P (not consumed) in R. At most one
+  allocation. R is a result that holds no array yet. }
+procedure PutFromPtr(var R: TBigDecimal; Neg: Boolean; P: PLimb; n: Integer; Scale: Int64);
+var
+  m, limit: UInt64;
+  fits: Boolean;
+begin
+  R.FScale := CheckScale(Scale);
+  if n > 0 then
+    n := NormLen(P, n);
+  if n = 0 then
+  begin
+    R.FSmall := 0;
+    R.FLimbs := nil;
+    R.FSign := 0;
+    Exit;
+  end;
+  fits := False;
+  m := 0;
+  if (n < 3) or ((n = 3) and (P[2] <= 9)) then
+  begin
+    if n >= 3 then m := UInt64(P[2]) * 1000000000000000000;
+    if n >= 2 then m += UInt64(P[1]) * LimbBase;
+    m += P[0];
+    if Neg then limit := UInt64(1) shl 63 else limit := (UInt64(1) shl 63) - 1;
+    fits := m <= limit;
+  end;
+  if Neg then R.FSign := -1 else R.FSign := 1;
+  if fits then
+  begin
+    if Neg then
+      R.FSmall := -Int64(m - 1) - 1
+    else
+      R.FSmall := Int64(m);
+    R.FLimbs := nil;
+  end
+  else
+  begin
+    R.FSmall := 0;
+    SetLength(R.FLimbs, n);
+    Move(P^, R.FLimbs[0], n * SizeOf(TLimb));
+  end;
+end;
+
+{ Rounds the magnitude at P (N limbs, N at most MaxStackLimbs, scale Scale) to
+  the context and stores the value in R. Sticky tells that a non-zero part lies
+  below the magnitude. Inexact tells that the result differs from the exact
+  value. The context has a precision above zero. }
+procedure PutRounded(var R: TBigDecimal; Neg: Boolean; P: PLimb; N: Integer;
+  Scale: Int64; const C: TMathContext; Sticky: Boolean; out Inexact: Boolean);
+var
+  buf, buf2: array[0..MaxStackLimbs] of TLimb;
+  drop: Int64;
+  nr: Integer;
+begin
+  Inexact := Sticky;
+  N := NormLen(P, N);
+  if N = 0 then
+  begin
+    PutFromPtr(R, Neg, P, 0, Scale);
+    Exit;
+  end;
+  drop := MagDigits(P, N) - C.Precision;
+  if drop <= 0 then
+  begin
+    PutFromPtr(R, Neg, P, N, Scale);
+    Exit;
+  end;
+  RoundMagDrop(P, N, drop, C.RoundingMode, Neg, Sticky, @buf[0], nr, Inexact);
+  Scale -= drop;
+  if MagDigits(@buf[0], nr) > C.Precision then
+  begin
+    // the rounded magnitude became a power of ten: drop one more zero digit
+    nr := DivPow10(@buf[0], nr, 1, @buf2[0]);
+    Dec(Scale);
+    PutFromPtr(R, Neg, @buf2[0], nr, Scale);
+    Exit;
+  end;
+  PutFromPtr(R, Neg, @buf[0], nr, Scale);
+end;
+
+procedure PutSmall(var R: TBigDecimal; V: Int64; Scale: Int64); inline;
+begin
+  R.FSmall := V;
+  R.FLimbs := nil;
+  R.FScale := CheckScale(Scale);
+  if V < 0 then R.FSign := -1
+  else if V > 0 then R.FSign := 1
+  else R.FSign := 0;
 end;
 
 { Magnitude of V times 10^k into a fresh array. Returns the length. }
@@ -407,28 +515,57 @@ end;
 
 { ----- add and subtract ----- }
 
-function AddCore(const A, B: TBigDecimal; NegateB: Boolean): TBigDecimal;
+function SmallMagnitude(V: Int64): UInt64; inline;
+begin
+  if V < 0 then Result := UInt64(-(V + 1)) + 1 else Result := UInt64(V);
+end;
+
+function ApplyCtx(const X: TBigDecimal; const c: TMathContext): TBigDecimal; inline;
+begin
+  if c.Precision <= 0 then
+    Result := X
+  // an Int64 value that has no more digits than the precision needs no rounding
+  else if (X.FLimbs = nil) and (c.Precision >= 19) then
+    Result := X
+  else if (X.FLimbs = nil) and (SmallMagnitude(X.FSmall) < Pow10_64[c.Precision]) then
+    Result := X
+  else
+    Result := X.Round(c);
+end;
+
+
+function WithCtx(const X: TBigDecimal; Ctx: PMathContext): TBigDecimal; inline;
+begin
+  if Ctx = nil then Result := X else Result := ApplyCtx(X, Ctx^);
+end;
+
+{ Fast paths of A + B or A - B: Int64 operands, and magnitudes of up to
+  MaxStackLimbs limbs in stack buffers. A non-nil Ctx with a precision above
+  zero rounds the result once. Returns False when no fast path applies. R holds
+  no array yet. The routine has no managed local, so it needs no finalization. }
+function TryAddFast(const A, B: TBigDecimal; NegateB: Boolean; Ctx: PMathContext;
+  var R: TBigDecimal): Boolean;
 var
   va, vb: TMagView;
-  la, lb, r: TLimbs;
   pa, pb: PLimb;
   na, nb, nr, c: Integer;
   sa, sb, s: Int64;
-  negA, negB: Boolean;
+  negA, negB, rounding: Boolean;
   x, y, z: Int64;
   d: Integer;
+  ba, bb, br: array[0..MaxStackLimbs + 2] of TLimb;
+  inexact: Boolean;
 begin
+  Result := True;
   sa := A.FScale;
   sb := B.FScale;
-  // small fast path
+  rounding := (Ctx <> nil) and (Ctx^.Precision > 0);
   if (A.FLimbs = nil) and (B.FLimbs = nil) then
   begin
     x := A.FSmall;
     y := B.FSmall;
     if sa = sb then
-    begin
-      d := 0;
-    end
+      d := 0
     else if sa > sb then
     begin
       d := Integer(sa - sb);
@@ -455,11 +592,79 @@ begin
         if ((x xor z) and (y xor z)) >= 0 then
         begin
           if sa > sb then s := sa else s := sb;
-          Exit(SmallResult(z, s));
+          if rounding and (Ctx^.Precision < 19) and
+             (SmallMagnitude(z) >= Pow10_64[Ctx^.Precision]) then
+            R := SmallResult(z, s).Round(Ctx^)
+          else
+            PutSmall(R, z, s);
+          Exit;
         end;
       end;
     end;
   end;
+  if sa > sb then s := sa else s := sb;
+  if (s - sa >= 9 * MaxStackLimbs) or (s - sb >= 9 * MaxStackLimbs) then
+    Exit(False);
+  GetMagView(A, va);
+  GetMagView(B, vb);
+  if (va.N = 0) or (vb.N = 0) then Exit(False);
+  if (va.N + Integer((s - sa) div LimbDigits) + 2 > MaxStackLimbs) or
+     (vb.N + Integer((s - sb) div LimbDigits) + 2 > MaxStackLimbs) then
+    Exit(False);
+  negA := va.Neg;
+  negB := vb.Neg;
+  if NegateB then negB := not negB;
+  pa := va.P; na := va.N;
+  pb := vb.P; nb := vb.N;
+  if sa < s then
+  begin
+    na := MulPow10(pa, na, s - sa, @ba[0]);
+    pa := @ba[0];
+  end;
+  if sb < s then
+  begin
+    nb := MulPow10(pb, nb, s - sb, @bb[0]);
+    pb := @bb[0];
+  end;
+  if negA = negB then
+  begin
+    nr := AddMag(pa, na, pb, nb, @br[0]);
+    c := 0;
+  end
+  else
+  begin
+    c := CmpMag(pa, na, pb, nb);
+    if c = 0 then
+    begin
+      PutFromPtr(R, False, nil, 0, s);
+      Exit;
+    end;
+    if c > 0 then
+      nr := SubMag(pa, na, pb, nb, @br[0])
+    else
+    begin
+      nr := SubMag(pb, nb, pa, na, @br[0]);
+      negA := negB;
+    end;
+  end;
+  if rounding then
+    PutRounded(R, negA, @br[0], nr, s, Ctx^, False, inexact)
+  else
+    PutFromPtr(R, negA, @br[0], nr, s);
+end;
+
+function AddCoreX(const A, B: TBigDecimal; NegateB: Boolean; Ctx: PMathContext): TBigDecimal;
+var
+  va, vb: TMagView;
+  la, lb, r: TLimbs;
+  pa, pb: PLimb;
+  na, nb, nr, c: Integer;
+  sa, sb, s: Int64;
+  negA, negB: Boolean;
+begin
+  if TryAddFast(A, B, NegateB, Ctx, Result) then Exit;
+  sa := A.FScale;
+  sb := B.FScale;
   GetMagView(A, va);
   GetMagView(B, vb);
   negA := va.Neg;
@@ -484,19 +689,19 @@ begin
   begin
     SetLength(r, nb);
     if nb > 0 then Move(pb^, r[0], nb * SizeOf(TLimb));
-    Exit(MakeFromMag(negB, r, nb, s));
+    Exit(WithCtx(MakeFromMag(negB, r, nb, s), Ctx));
   end;
   if nb = 0 then
   begin
     SetLength(r, na);
     Move(pa^, r[0], na * SizeOf(TLimb));
-    Exit(MakeFromMag(negA, r, na, s));
+    Exit(WithCtx(MakeFromMag(negA, r, na, s), Ctx));
   end;
   if negA = negB then
   begin
     if na > nb then SetLength(r, na + 1) else SetLength(r, nb + 1);
     nr := AddMag(pa, na, pb, nb, @r[0]);
-    Exit(MakeFromMag(negA, r, nr, s));
+    Exit(WithCtx(MakeFromMag(negA, r, nr, s), Ctx));
   end;
   c := CmpMag(pa, na, pb, nb);
   if c = 0 then
@@ -508,57 +713,64 @@ begin
   begin
     SetLength(r, na);
     nr := SubMag(pa, na, pb, nb, @r[0]);
-    Result := MakeFromMag(negA, r, nr, s);
+    Result := WithCtx(MakeFromMag(negA, r, nr, s), Ctx);
   end
   else
   begin
     SetLength(r, nb);
     nr := SubMag(pb, nb, pa, na, @r[0]);
-    Result := MakeFromMag(negB, r, nr, s);
+    Result := WithCtx(MakeFromMag(negB, r, nr, s), Ctx);
   end;
 end;
 
-function SmallMagnitude(V: Int64): UInt64; inline;
+
+function AddCore(const A, B: TBigDecimal; NegateB: Boolean): TBigDecimal;
 begin
-  if V < 0 then Result := UInt64(-(V + 1)) + 1 else Result := UInt64(V);
+  Result := AddCoreX(A, B, NegateB, nil);
 end;
 
 function ApplyDefault(const X: TBigDecimal): TBigDecimal; inline;
 var
   c: TMathContext;
 begin
-  if EffectiveContext(c) and (c.Precision > 0) then
-  begin
-    // an Int64 value that has no more digits than the precision needs no rounding
-    if (X.FLimbs = nil) and (c.Precision >= 19) then
-      Result := X
-    else if (X.FLimbs = nil) and (SmallMagnitude(X.FSmall) < Pow10_64[c.Precision]) then
-      Result := X
-    else
-      Result := X.Round(c);
-  end
+  if EffectiveContext(c) then
+    Result := ApplyCtx(X, c)
   else
     Result := X;
 end;
 
 class operator TBigDecimal.+(const A, B: TBigDecimal): TBigDecimal;
+var
+  c: TMathContext;
 begin
-  Result := ApplyDefault(AddCore(A, B, False));
+  if EffectiveContext(c) then
+  begin
+    if not TryAddFast(A, B, False, @c, Result) then Result := AddCoreX(A, B, False, @c);
+  end
+  else if not TryAddFast(A, B, False, nil, Result) then
+    Result := AddCoreX(A, B, False, nil);
 end;
 
 class operator TBigDecimal.-(const A, B: TBigDecimal): TBigDecimal;
+var
+  c: TMathContext;
 begin
-  Result := ApplyDefault(AddCore(A, B, True));
+  if EffectiveContext(c) then
+  begin
+    if not TryAddFast(A, B, True, @c, Result) then Result := AddCoreX(A, B, True, @c);
+  end
+  else if not TryAddFast(A, B, True, nil, Result) then
+    Result := AddCoreX(A, B, True, nil);
 end;
 
 function TBigDecimal.Add(const B: TBigDecimal; const C: TMathContext): TBigDecimal;
 begin
-  Result := AddCore(Self, B, False).Round(C);
+  if not TryAddFast(Self, B, False, @C, Result) then Result := AddCoreX(Self, B, False, @C);
 end;
 
 function TBigDecimal.Subtract(const B: TBigDecimal; const C: TMathContext): TBigDecimal;
 begin
-  Result := AddCore(Self, B, True).Round(C);
+  if not TryAddFast(Self, B, True, @C, Result) then Result := AddCoreX(Self, B, True, @C);
 end;
 
 class operator TBigDecimal.-(const Value: TBigDecimal): TBigDecimal;
@@ -605,14 +817,22 @@ end;
 
 { ----- multiply ----- }
 
-function MulCore(const A, B: TBigDecimal): TBigDecimal;
+{ Fast paths of A * B: Int64 operands, and products of up to MaxStackLimbs
+  limbs in a stack buffer. A non-nil Ctx with a precision above zero rounds the
+  result once. Returns False when no fast path applies. R holds no array yet.
+  The routine has no managed local, so it needs no finalization. }
+function TryMulFast(const A, B: TBigDecimal; Ctx: PMathContext;
+  var R: TBigDecimal): Boolean;
 var
   va, vb: TMagView;
-  r: TLimbs;
   nr: Integer;
-  x, y: Int64;
+  x, y, z: Int64;
   s: Int64;
+  buf: array[0..MaxStackLimbs] of TLimb;
+  inexact, rounding: Boolean;
 begin
+  Result := True;
+  rounding := (Ctx <> nil) and (Ctx^.Precision > 0);
   s := Int64(A.FScale) + B.FScale;
   if (A.FLimbs = nil) and (B.FLimbs = nil) then
   begin
@@ -620,8 +840,37 @@ begin
     y := B.FSmall;
     if (x > -MaxSmallMul) and (x < MaxSmallMul) and
        (y > -MaxSmallMul) and (y < MaxSmallMul) then
-      Exit(SmallResult(x * y, s));
+    begin
+      z := x * y;
+      if rounding and (Ctx^.Precision < 19) and
+         (SmallMagnitude(z) >= Pow10_64[Ctx^.Precision]) then
+        R := SmallResult(z, s).Round(Ctx^)
+      else
+        PutSmall(R, z, s);
+      Exit;
+    end;
   end;
+  GetMagView(A, va);
+  GetMagView(B, vb);
+  if (va.N = 0) or (vb.N = 0) or (va.N + vb.N > MaxStackLimbs) then
+    Exit(False);
+  nr := MulMag(va.P, va.N, vb.P, vb.N, @buf[0]);
+  if rounding then
+    PutRounded(R, va.Neg <> vb.Neg, @buf[0], nr, s, Ctx^, False, inexact)
+  else
+    PutFromPtr(R, va.Neg <> vb.Neg, @buf[0], nr, s);
+end;
+
+{ A * B for any size. }
+function MulCoreX(const A, B: TBigDecimal; Ctx: PMathContext): TBigDecimal;
+var
+  va, vb: TMagView;
+  r: TLimbs;
+  nr: Integer;
+  s: Int64;
+begin
+  if TryMulFast(A, B, Ctx, Result) then Exit;
+  s := Int64(A.FScale) + B.FScale;
   GetMagView(A, va);
   GetMagView(B, vb);
   if (va.N = 0) or (vb.N = 0) then
@@ -631,17 +880,29 @@ begin
   end;
   SetLength(r, va.N + vb.N);
   nr := MulMag(va.P, va.N, vb.P, vb.N, @r[0]);
-  Result := MakeFromMag(va.Neg <> vb.Neg, r, nr, s);
+  Result := WithCtx(MakeFromMag(va.Neg <> vb.Neg, r, nr, s), Ctx);
+end;
+
+function MulCore(const A, B: TBigDecimal): TBigDecimal;
+begin
+  Result := MulCoreX(A, B, nil);
 end;
 
 class operator TBigDecimal.*(const A, B: TBigDecimal): TBigDecimal;
+var
+  c: TMathContext;
 begin
-  Result := ApplyDefault(MulCore(A, B));
+  if EffectiveContext(c) then
+  begin
+    if not TryMulFast(A, B, @c, Result) then Result := MulCoreX(A, B, @c);
+  end
+  else if not TryMulFast(A, B, nil, Result) then
+    Result := MulCoreX(A, B, nil);
 end;
 
 function TBigDecimal.Multiply(const B: TBigDecimal; const C: TMathContext): TBigDecimal;
 begin
-  Result := MulCore(Self, B).Round(C);
+  if not TryMulFast(Self, B, @C, Result) then Result := MulCoreX(Self, B, @C);
 end;
 
 function TBigDecimal.Square: TBigDecimal;
@@ -676,6 +937,11 @@ begin
   if prec <= C.Precision then Exit(Self);
   drop := prec - C.Precision;
   GetMagView(Self, v);
+  if v.N <= MaxStackLimbs then
+  begin
+    PutRounded(Result, v.Neg, v.P, v.N, FScale, C, False, inexact);
+    Exit;
+  end;
   SetLength(r, v.N + 1);
   RoundMagDrop(v.P, v.N, drop, C.RoundingMode, v.Neg, False, @r[0], nr, inexact);
   sc := Int64(FScale) - drop;
@@ -1197,6 +1463,48 @@ begin
   else Result := Int32(S);
 end;
 
+{ Fast path of A / B rounded to the context: magnitudes of up to MaxStackLimbs
+  limbs after scaling, in stack buffers. Returns False when it does not apply
+  (zero operands and a context without a precision go the general way). R holds
+  no array yet. The routine has no managed local, so it needs no finalization. }
+function TryDivideFast(const A, B: TBigDecimal; const C: TMathContext;
+  var R: TBigDecimal): Boolean;
+var
+  va, vb: TMagView;
+  nn, nq, nr: Integer;
+  e, da, db, pref: Int64;
+  neg, inexact: Boolean;
+  nb2, qb, rb: array[0..MaxStackLimbs] of TLimb;
+  pn: PLimb;
+begin
+  Result := False;
+  if (C.Precision <= 0) or A.IsZero or B.IsZero then Exit;
+  GetMagView(A, va);
+  GetMagView(B, vb);
+  da := MagDigits(va.P, va.N);
+  db := MagDigits(vb.P, vb.N);
+  e := db + C.Precision + 1 - da;
+  if e < 0 then e := 0;
+  if e >= 9 * MaxStackLimbs then Exit;
+  nn := va.N + Integer(e div LimbDigits) + 2;
+  if (nn > MaxStackLimbs) or (vb.N > va.N + Integer(e div LimbDigits)) then Exit;
+  pn := va.P;
+  nn := va.N;
+  if e > 0 then
+  begin
+    nn := MulPow10(pn, nn, e, @nb2[0]);
+    pn := @nb2[0];
+  end;
+  if nn < vb.N then Exit;
+  neg := va.Neg <> vb.Neg;
+  pref := Int64(A.FScale) - B.FScale;
+  DivRemMag(pn, nn, vb.P, vb.N, @qb[0], nq, @rb[0], nr);
+  PutRounded(R, neg, @qb[0], nq, pref + e, C, nr > 0, inexact);
+  if not inexact then
+    R := StripToScale(R, pref);
+  Result := True;
+end;
+
 function TBigDecimal.Divide(const B: TBigDecimal; const C: TMathContext): TBigDecimal;
 var
   va, vb: TMagView;
@@ -1212,6 +1520,7 @@ var
   p: Integer;
 begin
   if C.Precision = 0 then Exit(Divide(B));
+  if TryDivideFast(Self, B, C, Result) then Exit;
   if B.IsZero then raise EBigDecimalDivByZero.Create('division by zero');
   pref := Int64(FScale) - B.FScale;
   if IsZero then

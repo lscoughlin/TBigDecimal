@@ -15,7 +15,7 @@ program BenchAll;
 {$coperators on}
 uses
   SysUtils, DateUtils, BigDecimal.Types, BigDecimal.Limbs, BigDecimal.Multiply,
-  BigDecimal.Divide, BigDecimal, BigDecimal.Math, BigDecimal.Trig,
+  BigDecimal.Divide, BigDecimal, BigDecimal.Elementary, BigDecimal.Trig,
   BigDecimal.Combinatorics, BigDecimal.Gamma, BigDecimal.Constants;
 
 function Pick(B: Boolean; const S1, S2: string): string;

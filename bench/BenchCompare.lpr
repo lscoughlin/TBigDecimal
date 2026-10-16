@@ -14,7 +14,7 @@ program BenchCompare;
 {$mode objfpc}{$H+}
 {$coperators on}
 uses
-  SysUtils, BigDecimal.Types, BigDecimal, BigDecimal.Math;
+  SysUtils, BigDecimal.Types, BigDecimal, BigDecimal.Elementary;
 
 function Secs: Double;
 begin
