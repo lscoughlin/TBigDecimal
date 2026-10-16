@@ -113,6 +113,29 @@ measured 4.7 times faster in a micro-benchmark (38.6 ns against 8.2 ns for
 `Z := Add(X, Y)`), but FPC 3.2.4 does not call the management operators as
 documented, so the layout is not usable (`doc/management-operators.md`).
 
+## TBcd (RTL unit FmtBCD)
+
+`bench/BenchBcd.lpr` (`make benchbcd`) compares add, multiply and divide with
+`TBcd`, the decimal type of the FPC RTL. `TBcd` holds at most 64 digits and has
+no square root, exponential or logarithm. The multiply operands have at most
+32 digits so that the exact product fits. `TBcd` divides to 63 digits, and
+`TBigDecimal` divides to a precision of 63. Each cell is the best of five
+trials of at least 50 ms, in microseconds. The ratio is TBigDecimal time
+divided by TBcd time.
+
+| digits | operation | TBigDecimal | TBcd | ratio |
+|-------:|-----------|------------:|-----:|------:|
+| 16 | add | 0.107 | 0.151 | 0.71 |
+| 16 | multiply | 0.175 | 0.694 | 0.25 |
+| 32 | add | 0.151 | 0.286 | 0.53 |
+| 32 | multiply | 0.191 | 2.136 | 0.09 |
+| 62 | add | 0.160 | 0.534 | 0.30 |
+| 62 | divide | 0.626 | 32.715 | 0.02 |
+
+`BcdDivide` raises `ERangeError` for the 16-digit and 32-digit operands of the
+benchmark (and for some other operands, such as 1.23456789 / 2.71828182) in
+FPC 3.2.4, so those divisions are not compared.
+
 ## Build profiles
 
 FPC does not rebuild a unit when only the compiler options change. The

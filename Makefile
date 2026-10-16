@@ -5,7 +5,7 @@ COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FEbin
 DEBUG    = $(COMMON) -FUlib/debug -g -gl -Cr -Co -Ct -O1
 RELEASE  = $(COMMON) -FUlib/release -O3
 
-.PHONY: test bench benchsmall benchcompare profile clean refs vectors heaptest
+.PHONY: test bench benchsmall benchcompare benchbcd profile clean refs vectors heaptest
 
 refs:
 	sh tools/fetchrefs.sh
@@ -34,6 +34,12 @@ benchcompare:
 	$(FPC) $(RELEASE) bench/BenchCompare.lpr
 	./bin/BenchCompare
 	python3 -W ignore tools/benchpython.py
+
+# Compares add, multiply and divide with TBcd of the RTL unit FmtBCD.
+benchbcd:
+	@mkdir -p lib/release bin
+	$(FPC) $(RELEASE) bench/BenchBcd.lpr
+	./bin/BenchBcd
 
 # Samples each 34-digit operation for 3 seconds and prints the top frames.
 # Needs the macOS `sample` tool.

@@ -124,7 +124,7 @@ sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000
 
 Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.2.0)
 holds the library units. The projects `RunTests.lpi` (modes Release and Debug),
-`BenchAll.lpi` and `BenchCompare.lpi` require the package. `lazbuild` builds
+`BenchAll.lpi`, `BenchCompare.lpi` and `BenchBcd.lpi` require the package. `lazbuild` builds
 them, for example `lazbuild lazarus/TBigDecimal.lpk` and
 `lazbuild lazarus/RunTests.lpi`. The binaries go to `bin/`, and the test
 binary runs from the project root, where `tests/refs` and `tests/vectors` are.
