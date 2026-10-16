@@ -1,0 +1,2 @@
+# Case IDs of dectest cases where TBigDecimal deliberately differs from the reference.
+# One case per line: id<TAB>reason. No deviations are known at present.

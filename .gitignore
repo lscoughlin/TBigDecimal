@@ -1,0 +1,12 @@
+plan/
+*.o
+*.ppu
+*.a
+*.dSYM/
+lib/
+bin/
+tests/refs/
+tools/.venv/
+tests/vectors/
+ppas.sh
+link*.res
