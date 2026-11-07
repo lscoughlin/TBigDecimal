@@ -1,0 +1,107 @@
+# Taskfile for TBigDecimal. Run `task` for build plus test.
+# Release flow: `task release` bumps the minor version, `task release-patch`
+# bumps the release (patch) version. Both test, commit, push, and cut a
+# source-only GitHub release (no assets; GitHub attaches source archives).
+version: '3'
+
+tasks:
+  default:
+    desc: Build everything, then run the tests
+    cmds:
+      - task: build
+      - task: test
+
+  build:
+    desc: Build the Lazarus package and every Lazarus project
+    cmds:
+      - lazbuild lazarus/TBigDecimal.lpk
+      - for p in lazarus/*.lpi; do lazbuild "$p"; done
+
+  test:
+    desc: Run the unit tests and the heap leak check
+    cmds:
+      - make test
+      - make heaptest
+
+  bench:
+    desc: Run every benchmark target
+    cmds:
+      - make bench benchsmall benchparse benchfinancial benchcompare benchbcd benchdivmod
+
+  version:
+    desc: Print the current library version
+    cmds:
+      - sed -n "s/.*BigDecimalVersion = '\(.*\)'.*/\1/p" src/BigDecimal.Types.pas | head -n 1
+
+  bump:
+    internal: true
+    env:
+      BUMP_MODE: '{{.MODE | default "minor"}}'
+    cmds:
+      - |
+        python3 - <<'PY'
+        import os, re
+        mode = os.environ.get('BUMP_MODE', 'minor')
+        types = 'src/BigDecimal.Types.pas'
+        s = open(types).read()
+        m = re.search(r"BigDecimalVersion = '(\d+)\.(\d+)\.(\d+)'", s)
+        major, minor, rel = (int(g) for g in m.groups())
+        if mode == 'minor':
+            minor, rel = minor + 1, 0
+        elif mode == 'patch':
+            rel += 1
+        else:
+            raise SystemExit('unknown bump mode: ' + mode)
+        new = f'{major}.{minor}.{rel}'
+        old = m.group(0).split("'")[1]
+        s = s.replace(f"BigDecimalVersion = '{old}'", f"BigDecimalVersion = '{new}'")
+        s = re.sub(r'BigDecimalVersionMajor = \d+;', f'BigDecimalVersionMajor = {major};', s)
+        s = re.sub(r'BigDecimalVersionMinor = \d+;', f'BigDecimalVersionMinor = {minor};', s)
+        s = re.sub(r'BigDecimalVersionRelease = \d+;', f'BigDecimalVersionRelease = {rel};', s)
+        open(types, 'w').write(s)
+        for path in ('tests/TestLibrary.pas', 'README.md'):
+            t = open(path).read()
+            open(path, 'w').write(t.replace(old, new))
+        lpk = 'lazarus/TBigDecimal.lpk'
+        t = open(lpk).read()
+        t = re.sub(r'<Version Major="\d+" Minor="\d+"/>', f'<Version Major="{major}" Minor="{minor}"/>', t)
+        open(lpk, 'w').write(t)
+        print(new)
+        PY
+
+  release:
+    desc: Bump the minor version, test, commit, push, cut a source-only GitHub release
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: 'working tree is not clean; commit or stash first'
+    cmds:
+      - task: bump
+        vars: {MODE: minor}
+      - task: release-flow
+        vars: {KIND: minor}
+
+  release-patch:
+    desc: Bump the release version, test, commit, push, cut a source-only GitHub release
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: 'working tree is not clean; commit or stash first'
+    cmds:
+      - task: bump
+        vars: {MODE: patch}
+      - task: release-flow
+        vars: {KIND: release}
+
+  release-flow:
+    internal: true
+    vars:
+      KIND: minor
+    cmds:
+      - task: test
+      - |
+        set -e
+        V=$(sed -n "s/.*BigDecimalVersion = '\(.*\)'.*/\1/p" src/BigDecimal.Types.pas | head -n 1)
+        git add src/BigDecimal.Types.pas tests/TestLibrary.pas README.md lazarus/TBigDecimal.lpk
+        git commit -m "Release $V: bump {{.KIND}} version"
+        git push origin main
+        gh release create "v$V" --title "TBigDecimal $V" --generate-notes
+        echo "released v$V (source-only)"
