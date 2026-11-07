@@ -25,7 +25,7 @@ type
 
 var
   { n at which Factorial switches from range splitting to the swing recursion. }
-  FactorialSwingThreshold: Integer = 600;     // bench/RESULTS.md: swing wins from about 600
+  FactorialSwingThreshold: Integer = 600;     // doc/RESULTS.md: swing wins from about 600
   { k at which Binomial switches from the multiplicative form to Kummer. }
   BinomialKummerThreshold: Integer = 12;      // Kummer wins from k = 13 (when n is moderate)
   { Largest n for which Binomial sieves primes (the sieve needs n/2 bytes). }

@@ -2,7 +2,7 @@
 
 TBigDecimal is an arbitrary-precision decimal math library for Object Pascal.
 It targets Free Pascal (FPC). It exposes the `TBigDecimal` type. The current
-version is 0.2.0 (`BigDecimalVersion` in unit `BigDecimal.Types`).
+version is 0.3.0 (`BigDecimalVersion` in unit `BigDecimal.Types`).
 
 `TBigDecimal` is an advanced record. It follows the Java `BigDecimal` type
 in its model and its names. A value is an unscaled integer of any size and a
@@ -10,8 +10,9 @@ in its model and its names. A value is an unscaled integer of any size and a
 
 ## Goals
 
-- Exact decimal arithmetic. Addition, subtraction and multiplication never
-  lose digits.
+- Exact decimal arithmetic. Addition and subtraction never lose digits.
+  Multiplication and division round to 34 digits, half-even, unless a
+  default context or an explicit context says otherwise.
 - Value semantics. A `TBigDecimal` behaves like an `Integer`. It needs no
   `Free` call and no `try..finally` block.
 - Full control of rounding. The library has a rounding mode enum and a
@@ -75,8 +76,9 @@ exact) and a `RoundingMode`. Predefined contexts: `Decimal32`, `Decimal64`,
 Each thread can set a default `TMathContext` (`TMathContext.SetDefault`, or
 the scoped `TMathContextScope.Enter`). When a default exists, operators and
 context-free function overloads round to it. An explicit context argument
-overrides it. A new thread starts with no default. With no default, `+`, `-`
-and `*` are exact, and `/` is exact or raises.
+overrides it. A new thread starts with no default. With no default, `+`
+and `-` are exact, and `*` and `/` round to 34 significant digits,
+half-even, unless the global `NoContextFallback128` is off.
 
 ## API summary
 
@@ -110,7 +112,10 @@ and `*` are exact, and `/` is exact or raises.
   exact integers. Unit `BigDecimal.Gamma`: `Gamma`, `LnGamma`, non-integer
   `Factorial`, `LnFactorial`.
 - Financial helpers (unit `BigDecimal.Financial`): `CompoundFactor`,
-  `PresentValue`, `FutureValue`, `AnnuityFactor`, `AnnualizedRate`.
+  `PresentValue`, `FutureValue`, `AnnuityFactor`, `AnnualizedRate`, and the
+  Excel functions `PaymentXL`, `InterestPaymentXL`, `PrincipalPaymentXL`,
+  `PresentValueXL`, `FutureValueXL`, `PeriodCountXL`, `PeriodicRateXL`,
+  `EffectiveRateXL`, `NominalRateXL`.
 
 ## Build and test
 
@@ -122,9 +127,11 @@ make benchcompare  # timings next to Python decimal
 sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000
 ```
 
-Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.2.0)
-holds the library units. The projects `RunTests.lpi` (modes Release and Debug),
-`BenchAll.lpi`, `BenchCompare.lpi` and `BenchBcd.lpi` require the package. `lazbuild` builds
+Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.3.0)
+holds the library units. The projects `RunTests.lpi` (modes Release and Debug), `BenchAll.lpi`,
+`BenchSmall.lpi`, `BenchCompare.lpi`, `BenchBcd.lpi`, `BenchDivMod.lpi`,
+`BenchParseFormat.lpi`, `BenchFinancial.lpi` and `ProfileSmall.lpi`
+require the package. `lazbuild` builds
 them, for example `lazbuild lazarus/TBigDecimal.lpk` and
 `lazbuild lazarus/RunTests.lpi`. The binaries go to `bin/`, and the test
 binary runs from the project root, where `tests/refs` and `tests/vectors` are.
@@ -136,7 +143,7 @@ generator needs Python 3 with `mpmath`.
 
 The design is in [`doc/design.md`](doc/design.md). Usage examples are in
 [`doc/usage.md`](doc/usage.md). Benchmark results are in
-[`bench/RESULTS.md`](bench/RESULTS.md). Faults of FPC 3.2.4 management operators
+[`doc/RESULTS.md`](doc/RESULTS.md). Faults of FPC 3.2.4 management operators
 that limit the record layout are in
 [`doc/management-operators.md`](doc/management-operators.md).
 

@@ -190,7 +190,9 @@ end;
 function FxMul(const A, B: TFx): TFx;
 var
   ma, mb: Double;
+  GDefaultGuard: TSuspendDefault;
 begin
+  GDefaultGuard.Suspend;
   ma := ApproxAbs(A.V);
   mb := ApproxAbs(B.V);
   Result.W := A.W;
@@ -211,7 +213,10 @@ begin
 end;
 
 function FxMulInt(const A: TFx; N: Int64): TFx;
+var
+  GDefaultGuard: TSuspendDefault;
 begin
+  GDefaultGuard.Suspend;
   Result.W := A.W;
   Result.V := A.V * TBigDecimal.Create(N);
   Result.E := A.E * Abs(N);

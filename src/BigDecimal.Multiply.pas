@@ -23,7 +23,7 @@ uses
 
 var
   { Limb count at which Karatsuba replaces schoolbook. Set from bench/BenchMul. }
-  KaratsubaThreshold: Integer = 160;  // bench/RESULTS.md: tie between 128 and 160 limbs, 15% faster at 256
+  KaratsubaThreshold: Integer = 160;  // doc/RESULTS.md: tie between 128 and 160 limbs, 15% faster at 256
 
 { r := a * b. r needs na + nb limbs and must not overlap a or b.
   Returns the normalized length. Both operands are normalized and non-empty. }

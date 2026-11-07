@@ -91,9 +91,13 @@ var
   d: Double;
   bitsGot: UInt64;
   expIdx: Integer;
+  SavedFallback: Boolean;
 begin
   sl := TStringList.Create;
   try
+    { Vectors test exact operator semantics. }
+    SavedFallback := NoContextFallback128;
+    NoContextFallback128 := False;
     sl.LoadFromFile(VecPath(Name));
     bad := 0;
     total := 0;
@@ -195,6 +199,7 @@ begin
     if bad > 0 then
       Fail(Name + ': ' + IntToStr(bad) + ' of ' + IntToStr(total) + ' failed' + msg);
   finally
+    NoContextFallback128 := SavedFallback;
     sl.Free;
   end;
 end;

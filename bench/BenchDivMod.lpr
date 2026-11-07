@@ -15,7 +15,7 @@ program BenchDivMod;
 {$mode objfpc}{$H+}{$R-}{$Q-}
 {$inline on}
 {$coperators on}
-uses SysUtils, DateUtils;
+uses SysUtils;
 
 const
   Base = 1000000000;
@@ -95,7 +95,7 @@ end;
 
 function Secs: Double;
 begin
-  Result := Now * 86400.0;
+  Result := Double(GetTickCount64) / 1000.0;
 end;
 
 var

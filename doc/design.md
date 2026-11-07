@@ -85,7 +85,7 @@ The research on FPC behavior gives these points
   every `UInt64`. Other targets use the compiler divide. A pure Pascal
   multiply-high from 32-bit pieces and a `Double` estimate
   `q = Trunc(Double(x) · 1e-9)` with a one-step correction both measure slower
-  than the `umulh` form (`bench/RESULTS.md`).
+  than the `umulh` form (`doc/RESULTS.md`).
 - Kernel loops split a product into a limb part and a carry in a way that does
   not depend on the previous limb where possible (the column-order multiply
   of section 3.2 and the multiply-and-subtract step of section 3.3). The
@@ -128,7 +128,7 @@ shortcut).
 
 The result scale is `A.scale + B.scale`. The magnitude product uses these
 algorithms by operand size in limbs. The thresholds are variables that a
-benchmark sets per target (`bench/RESULTS.md`).
+benchmark sets per target (`doc/RESULTS.md`).
 
 | Size (limbs)       | Algorithm            | Notes |
 |--------------------|----------------------|-------|
@@ -214,9 +214,11 @@ round the result.
   correctly rounded result for every rounding mode.
 
 The `/` operator uses the thread-local default context when one is set
-(section 4.1). With no default context, it calls the exact `Divide(A, B)`.
-This agrees with Java when no context is set. A caller who needs a rounded
-quotient at one call site uses the three-argument form.
+(section 4.1). With no default context, it rounds to 34 significant
+digits, half-even, unless `NoContextFallback128` is off, in which case it
+calls the exact `Divide(A, B)`. The `*` operator follows the same rule. A
+caller who needs another rounding at one call site uses the context form.
+A caller who needs the exact quotient calls `Divide(A, B)` directly.
 
 ### 3.4 Rounding
 
@@ -329,10 +331,12 @@ Rules:
   digits in the context `RoundingMode`. A default context with
   `Precision = 0` means exact arithmetic, as `MathContext.UNLIMITED` does.
 - An explicit context argument always overrides the default.
-- With no default context, `+`, `-` and `*` are exact. `/` is exact and can
-  raise `EBigDecimalNonTerminating`. A transcendental function without a
-  context argument raises `EBigDecimalNoContext`, because the result needs a
-  precision.
+- With no default context, `+` and `-` are exact. `*` and `/` round to 34
+  significant digits, half-even, unless the global `NoContextFallback128`
+  is off (its default is on). With the flag off, `*` is exact and `/` is
+  exact and can raise `EBigDecimalNonTerminating`. A transcendental
+  function without a context argument raises `EBigDecimalNoContext`,
+  because the result needs a precision.
 - Methods whose meaning does not involve a precision ignore the default:
   comparison, `Abs`, `Negate`, `SetScale` (it has explicit scale and mode),
   `ToString`, parsing and conversion. `Create` never rounds.
@@ -370,6 +374,8 @@ Rules:
   same kind. The guard clears the default context of the thread while the
   function runs and restores it at exit, so the `+`, `-`, `*` and `/` operators
   inside the library stay exact. This is how internals never read the default.
+  The guard also marks the region as exact, so the fallback of the rule
+  above does not apply inside a library function.
 - Only unmanaged types live in `threadvar` variables. A probe under `heaptrc`
   showed that a `threadvar` that holds a dynamic array leaks its array when
   the thread ends. `TMathContext` has no managed field, so the default
@@ -597,6 +603,28 @@ subtract nearly equal values or round an exponent) and rounds once at the end.
 These helpers are not Ziv-checked, so in rare cases (about 1 in 10^11 for the
 `p + 12` form) the last digit can differ from the correctly rounded value.
 
+The nine Excel functions (`PaymentXL`, `InterestPaymentXL`,
+`PrincipalPaymentXL`, `PresentValueXL`, `FutureValueXL`, `PeriodCountXL`,
+`PeriodicRateXL`, `EffectiveRateXL`, `NominalRateXL`) take an integer period
+count, so `(1 + r)^n` is an integer power. The shared `GrowthMinusOne` routine
+computes it exactly while the digit estimate stays below a threshold, else
+rounded once at the working precision. Each function divides once at the
+working precision and rounds once to the context. The working precision is
+`p + 20` plus twice the cancellation depth of `r·n`, a growth-depth estimate
+for large `(1 + r)^n`, and the deepest input tail. `PeriodCountXL` is the only
+annuity function that uses `Ln`, and `NominalRateXL` is the only one that uses
+a fractional `Pow`; both are covered by the same guards.
+
+`PeriodicRateXL` solves `FutureValueXL(r) = fv` by Newton iteration with a
+closed-form derivative. The iteration runs at the guarded precision, stops
+when the step drops below `10^-(p+10)`, and allows 100 iterations. A step
+that reaches `-1` is halved, up to 60 halvings per iteration. A zero payment
+goes through `AnnualizedRate` directly, and exact-zero inputs return zero
+without iteration. Inputs without a root raise `EBigDecimalDomain`; an
+iteration that exhausts its budget, or a rounded result at or below `-1`,
+raises `EBigDecimalNoConvergence`. With two sign changes the result is the
+root that Newton reaches from `Guess`, as in Excel.
+
 ### 5.8 Factorials, combinatorics and gamma
 
 The functions of this section live in `BigDecimal.Combinatorics` and
@@ -703,7 +731,7 @@ symmetry. If `k = 0` the result is 1. Two size classes apply:
    This needs no big division.
 
 The library has no separate class for results that fit in `UInt64` (CPython
-keeps a table of limits for it). The benchmark in `bench/RESULTS.md` shows
+keeps a table of limits for it). The benchmark in `doc/RESULTS.md` shows
 Kummer's form ten times faster than the multiplicative form already at
 `k = 20`, and the cost of a `TBigDecimal` for a result below 2^63 is small.
 The recursion `C(n,k) = C(n,j) · C(n−j,k−j) / C(k,j)` with `j = k/2`, which
@@ -989,9 +1017,13 @@ overlap.
 
 ## 9. Decisions
 
-1. With no thread-local default context, `/` is exact and can raise. This
-   matches Java. The thread-local default context (section 4.1) lets a
-   program choose rounded arithmetic without changing the operator syntax.
+1. With no thread-local default context, `*` and `/` round to 34
+   significant digits, half-even. This differs from Java, where the
+   operators are exact. The fallback keeps naive code safe: a product
+   cannot grow without bound and a quotient cannot raise. The global
+   `NoContextFallback128` restores exact operators when set to `False`.
+   The thread-local default context (section 4.1) lets a program choose
+   another rounding without changing the operator syntax.
 2. `+`, `-` and `*` round under a default context, as in Python `decimal`.
    Java has no such feature, so no Java behavior conflicts.
 3. Constants are cached in one shared cache that a lock guards (section 5.6).
@@ -1012,7 +1044,7 @@ overlap.
   at high precision. The library evaluates these series in fixed point at
   O(p²).
 - **Faster division.** Division is 1.7 to 2.5 times slower than Python
-  `decimal` (`bench/RESULTS.md`). A Burnikel-Ziegler recursion, or a division
+  `decimal` (`doc/RESULTS.md`). A Burnikel-Ziegler recursion, or a division
   in 10^18 limbs with 128-bit products, would reduce the gap.
 - **Reciprocal-root square root.** A Newton iteration for `1/sqrt(x)` needs
   only multiplications and avoids the divisions of the integer iteration.
@@ -1021,7 +1053,7 @@ overlap.
 
 ## 11. Measurements and limits
 
-Measurements are in `bench/RESULTS.md` (Apple Silicon aarch64, FPC
+Measurements are in `doc/RESULTS.md` (Apple Silicon aarch64, FPC
 3.2.4-rc2). The main facts:
 
 - **Tests.** The suite has 101 fpcunit tests. It runs the oracle vectors (about

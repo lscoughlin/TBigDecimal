@@ -23,18 +23,24 @@ begin
 end;
 ```
 
-`+`, `-` and `*` are exact. The scale of a sum is the larger scale, and the
-scale of a product is the sum of the scales.
+`+` and `-` are exact. The scale of a sum is the larger scale. `*` rounds
+to the default context when one is set, else to 34 significant digits,
+half-even (see below). The scale of an exact product is the sum of the
+scales.
 
 ## Division and rounding
 
-The `/` operator is exact. It raises `EBigDecimalNonTerminating` when the
-quotient has no finite decimal expansion. A division that rounds names its
-rounding:
+The `/` operator rounds to the default context when one is set, else to 34
+significant digits, half-even (see below). A division that rounds another
+way names its rounding. The exact quotient is available as `Divide(B)`,
+which raises `EBigDecimalNonTerminating` when the quotient has no finite
+decimal expansion:
 
 ```pascal
+a := TBigDecimal.Create(1) / TBigDecimal.Create(3); // 0.3333... (34 digits)
 a := TBigDecimal.Create(1).Divide(TBigDecimal.Create(3), Decimal128);  // 34 digits
 a := TBigDecimal.Create(10).Divide(TBigDecimal.Create(3), 2, rmHalfUp); // 3.33
+a := TBigDecimal.Create(10).Divide(TBigDecimal.Create(4)); // 2.5 exactly
 a := TBigDecimal.Create('2.5').SetScale(0, rmHalfEven);                 // 2
 a := TBigDecimal.Create('1234.5678').Round(TMathContext.Make(6, rmDown)); // 1234.56
 ```
@@ -61,6 +67,12 @@ end;                                                    // the previous default 
 An explicit context argument overrides the default. A new thread starts with no
 default. Library functions ignore the default while they run, so a function
 with a context argument gives the same result with and without a default.
+
+With no default, `*` and `/` round to 34 significant digits, half-even.
+The global `NoContextFallback128` controls this behavior and is `True`. A
+program that needs exact operators sets it to `False`; `*` then keeps the
+full product and `/` raises `EBigDecimalNonTerminating` on a quotient
+without a finite expansion. Library internals stay exact in both cases.
 
 ## Functions
 
@@ -104,7 +116,15 @@ uses BigDecimal.Financial;
 
 FutureValue(TBigDecimal.Create(1000), TBigDecimal.Create('0.05'), TBigDecimal.Create(10), Decimal64);
 AnnuityFactor(TBigDecimal.Create('0.05'), TBigDecimal.Create(10), Decimal64);
+PaymentXL(TBigDecimal.Create('0.004'), 360, TBigDecimal.Create(250000), Decimal64);
 ```
+
+The `XL` functions follow the Excel semantics: money paid out is negative,
+`TPaymentTiming` selects end-of-period (`ptEnd`) or beginning-of-period
+(`ptBegin`) payments, and each function has overloads with defaulted trailing
+arguments plus forms that read the default context. As with the other
+helpers, the last digit can differ from the correctly rounded value in rare
+cases.
 
 ## Exceptions
 
@@ -120,6 +140,7 @@ All library exceptions descend from `EBigDecimal`:
 | `EBigDecimalNoContext` | a function needs a precision and no default exists |
 | `EBigDecimalPrecision` | a result could not be rounded within the working-precision limit |
 | `EBigDecimalDomain` | an argument is outside the domain of the function |
+| `EBigDecimalNoConvergence` | the rate iteration did not converge |
 
 ## Speed
 
@@ -127,4 +148,4 @@ Values that fit in 64 bits use `Int64` arithmetic and allocate nothing. Larger
 values use base 10^9 limbs. Multiplication uses Karatsuba above 160 limbs.
 Division uses a Newton reciprocal above 4096 limbs. The elementary functions
 cost O(w²) limb operations at w digits, so a precision of many thousands of
-digits is slow (see `bench/RESULTS.md`).
+digits is slow (see `doc/RESULTS.md`).

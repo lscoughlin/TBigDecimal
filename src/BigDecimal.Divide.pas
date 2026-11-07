@@ -25,7 +25,7 @@ var
   { Count of Newton divisions that fell back to Algorithm D (for tests). }
   NewtonFallbacks: Integer = 0;
   { Divisor size in limbs above which the Newton reciprocal path runs. }
-  NewtonDivThreshold: Integer = 4096;  // bench/RESULTS.md: Knuth wins up to 2048 limbs, tie at 4096
+  NewtonDivThreshold: Integer = 4096;  // doc/RESULTS.md: Knuth wins up to 2048 limbs, tie at 4096
 
 { q := a div b, rem := a mod b. a and b are normalized, b is not empty.
   q needs na - nb + 1 limbs (at least 1), rem needs nb limbs.

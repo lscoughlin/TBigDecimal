@@ -18,7 +18,7 @@ uses
 
 function Secs: Double;
 begin
-  Result := Now * 86400.0;
+  Result := Double(GetTickCount64) / 1000.0;
 end;
 
 function Digits(P, Seed: Integer): string;

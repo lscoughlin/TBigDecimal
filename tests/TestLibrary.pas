@@ -21,6 +21,7 @@ type
   TLibraryTests = class(TTestCase)
   private
     function Ref(const Name: string): string;
+    procedure CheckClose(const Msg: string; const Got, Want: TBigDecimal; P: Integer);
   published
     // text and basic operations
     procedure TestJavaToStringExamples;
@@ -36,6 +37,7 @@ type
     procedure TestDefaultContextIsolation;
     procedure TestUnlimitedDefaultIsExact;
     procedure TestNoContextRaises;
+    procedure TestNoContextFallback128;
     // reference files
     procedure TestPiDigits;
     procedure TestPiDirectedModes;
@@ -66,6 +68,16 @@ type
     procedure TestFinancialExample;
     procedure TestConstantVectors;
     procedure TestFinancialVectors;
+    // Excel annuity and rate functions
+    procedure TestExcelTypes;
+    procedure TestExcelValues;
+    procedure TestExcelIdentities;
+    procedure TestExcelEdges;
+    procedure TestExcelErrors;
+    procedure TestExcelCoreVectors;
+    procedure TestExcelSplitVectors;
+    procedure TestPeriodicRate;
+    procedure TestExcelDefaultContext;
   end;
 
 implementation
@@ -81,6 +93,31 @@ end;
 function D(const S: string): TBigDecimal;
 begin
   Result := TBigDecimal.Create(S);
+end;
+
+procedure TLibraryTests.CheckClose(const Msg: string; const Got, Want: TBigDecimal; P: Integer);
+var
+  d, bound: TBigDecimal;
+begin
+  d := (Got - Want).Abs;
+  if Want.IsZero then
+    bound := TBigDecimal.Create(TBigDecimal.One, P)
+  else
+    bound := Want.Abs.ScaleByPowerOfTen(5 - P);
+  AssertTrue(Msg + ' got ' + Got.ToString + ' want ' + Want.ToString,
+    d.CompareTo(bound) <= 0);
+end;
+
+function TimingOf(const S: string): TPaymentTiming;
+begin
+  if S = '1' then Result := ptBegin else Result := ptEnd;
+end;
+
+{ Vector values compare as strings, except that any spelling of zero
+  matches: the scale of an exact zero is cosmetic. }
+function SameVec(const Got, Exp: string): Boolean;
+begin
+  Result := (Got = Exp) or (D(Got).IsZero and D(Exp).IsZero);
 end;
 
 procedure TLibraryTests.TestJavaToStringExamples;
@@ -184,16 +221,10 @@ end;
 procedure TLibraryTests.TestDefaultContextArithmetic;
 var
   S: TMathContextScope;
-  q: TBigDecimal;
 begin
   TMathContext.ClearDefault;
   AssertEquals('0.3333333333333333333333333333333333', D('1').Divide(D('3'), Decimal128).ToString);
-  try
-    q := D('1') / D('3');
-    Fail('exact division should raise ' + q.ToString);
-  except
-    on EBigDecimalNonTerminating do ;
-  end;
+  AssertEquals('0.3333333333333333333333333333333333', (D('1') / D('3')).ToString);
   S.Enter(Decimal32);
   AssertEquals('0.3333333', (D('1') / D('3')).ToString);
   AssertEquals('1234568', (D('1234567.89') + D('0')).ToString);
@@ -254,6 +285,7 @@ begin
     32: Result := AnnualizedRate(D('1.7'), D('3.5'), c);
     33: Result := Exp(x, c).Divide(D('3'), c);
     34: Result := PowExact(x, 6);
+    35: Result := PaymentXL(D('0.05'), 10, D('1000'), c);
   else
     Result := TBigDecimal.Zero;
   end;
@@ -261,7 +293,7 @@ end;
 
 procedure TLibraryTests.TestDefaultContextIsolation;
 const
-  Cases = 35;
+  Cases = 36;
 var
   i: Integer;
   plain: array[0..Cases - 1] of TBigDecimal;
@@ -304,6 +336,47 @@ begin
     on EBigDecimalNoContext do ;
   end;
   AssertEquals('1.5', (D('1.2') + D('0.3')).ToString);
+end;
+
+procedure TLibraryTests.TestNoContextFallback128;
+var
+  Saved: Boolean;
+  c: TMathContext;
+  q, onResult, offResult: TBigDecimal;
+begin
+  TMathContext.ClearDefault;
+  Saved := NoContextFallback128;
+  try
+    NoContextFallback128 := True;
+    AssertEquals('0.3333333333333333333333333333333333', (D('1') / D('3')).ToString);
+    AssertEquals('12.19326311370217952261850327338668',
+      (D('1.234567890123456789012345678901234567890123') *
+       D('9.876543210987654321098765432109876543210987')).ToString);
+    try
+      q := D('1').Divide(D('3'));
+      Fail('exact Divide should raise ' + q.ToString);
+    except
+      on EBigDecimalNonTerminating do ;
+    end;
+    NoContextFallback128 := False;
+    try
+      q := D('1') / D('3');
+      Fail('exact division should raise ' + q.ToString);
+    except
+      on EBigDecimalNonTerminating do ;
+    end;
+    AssertEquals('12.193263113702179522618503273386678859451145419856126256664487797134336296860222381401',
+      (D('1.234567890123456789012345678901234567890123') *
+       D('9.876543210987654321098765432109876543210987')).ToString);
+    c := TMathContext.Make(40, rmHalfEven);
+    NoContextFallback128 := True;
+    onResult := Sqrt(D('2'), c);
+    NoContextFallback128 := False;
+    offResult := Sqrt(D('2'), c);
+    AssertTrue(onResult.Identical(offResult));
+  finally
+    NoContextFallback128 := Saved;
+  end;
 end;
 
 function LoadFirstLine(const FileName: string): string;
@@ -518,7 +591,10 @@ end;
 procedure TLibraryTests.TestGammaIntegerIsFactorial;
 var
   c: TMathContext;
+  GDefaultGuard: TSuspendDefault;
 begin
+  { Exact operator semantics for the recurrence check. }
+  GDefaultGuard.Suspend;
   c := TMathContext.Make(80, rmHalfEven);
   AssertTrue(Gamma(D('30'), c) = Factorial(29).Round(c));
   AssertTrue(Gamma(D('1'), c) = D('1'));
@@ -601,8 +677,8 @@ end;
 
 procedure TLibraryTests.TestVersion;
 begin
-  AssertEquals('0.2.0', BigDecimalVersion);
-  AssertEquals('0.2.0', Format('%d.%d.%d', [BigDecimalVersionMajor,
+  AssertEquals('0.3.0', BigDecimalVersion);
+  AssertEquals('0.3.0', Format('%d.%d.%d', [BigDecimalVersionMajor,
     BigDecimalVersionMinor, BigDecimalVersionRelease]));
 end;
 
@@ -644,7 +720,10 @@ var
   a, b, sum, prod, q, q2: TBigDecimal;
   c: TMathContext;
   m: TRoundingMode;
+  GDefaultGuard: TSuspendDefault;
 begin
+  { Exact operator semantics for the stack-path checks. }
+  GDefaultGuard.Suspend;
   // operand sizes around the limit of the stack buffers (48 limbs, 432 digits)
   RandSeed := 777;
   for i := 1 to 600 do
@@ -900,6 +979,422 @@ begin
       sl.Free;
     end;
   end;
+end;
+
+procedure TLibraryTests.TestExcelTypes;
+begin
+  AssertEquals(0, Ord(ptEnd));
+  AssertEquals(1, Ord(ptBegin));
+  AssertTrue(EBigDecimalNoConvergence.InheritsFrom(EBigDecimal));
+end;
+
+procedure TLibraryTests.TestExcelValues;
+var
+  c40, c15: TMathContext;
+  r: TBigDecimal;
+begin
+  TMathContext.ClearDefault;
+  c40 := TMathContext.Make(40, rmHalfEven);
+  c15 := TMathContext.Make(15, rmHalfEven);
+  r := D('0.08').Divide(D('12'), c40);
+  AssertEquals('-1037.03208935915', PaymentXL(r, 10, D('10000'), c40).Round(c15).ToString);
+  AssertEquals('-1030.16432717797',
+    PaymentXL(r, 10, D('10000'), D('0'), ptBegin, c40).Round(c15).ToString);
+  AssertEquals('-1037.03208935915',
+    PaymentXL(r, 10, D('10000'), D('0'), c40).Round(c15).ToString);
+  r := D('0.1').Divide(D('12'), c40);
+  AssertEquals('-66.6666666666667', InterestPaymentXL(r, 1, 36, D('8000'), c40).Round(c15).ToString);
+  AssertEquals('-191.470830884033', PrincipalPaymentXL(r, 1, 36, D('8000'), c40).Round(c15).ToString);
+  AssertEquals('-66.6666666666667',
+    InterestPaymentXL(r, 1, 36, D('8000'), D('0'), c40).Round(c15).ToString);
+  r := D('0.08').Divide(D('12'), c40);
+  AssertEquals('-59777.1458511880', PresentValueXL(r, 240, D('500'), c40).Round(c15).ToString);
+  AssertEquals('-59777.1458511880',
+    PresentValueXL(r, 240, D('500'), D('0'), c40).Round(c15).ToString);
+  r := D('0.06').Divide(D('12'), c40);
+  AssertEquals('2581.40337406018',
+    FutureValueXL(r, 10, D('-200'), D('-500'), ptBegin, c40).Round(c15).ToString);
+  AssertTrue(FutureValueXL(r, 10, D('-200'), D('-500'), c40) =
+    FutureValueXL(r, 10, D('-200'), D('-500'), ptEnd, c40));
+  r := D('0.12').Divide(D('12'), c40);
+  AssertEquals('60.0821228537617',
+    PeriodCountXL(r, D('-100'), D('-1000'), D('10000'), c40).Round(c15).ToString);
+  AssertEquals('59.6738656742946',
+    PeriodCountXL(r, D('-100'), D('-1000'), D('10000'), ptBegin, c40).Round(c15).ToString);
+  AssertEquals('0.00770147248820204', PeriodicRateXL(48, D('-200'), D('8000'), c40).Round(c15).ToString);
+  AssertEquals('0.00770147248820204',
+    PeriodicRateXL(48, D('-200'), D('8000'), D('0'), c40).Round(c15).ToString);
+  AssertEquals('0.0535426673707581', EffectiveRateXL(D('0.0525'), 4, c40).Round(c15).ToString);
+  AssertEquals('0.0525003198683559', NominalRateXL(D('0.053543'), 4, c40).Round(c15).ToString);
+end;
+
+type
+  TShape = record
+    R: string;
+    N: Int64;
+    Pv, Fv: string;
+    T: TPaymentTiming;
+  end;
+
+procedure TLibraryTests.TestExcelIdentities;
+const
+  Shapes: array[0..5] of TShape = (
+    (R: '0.005'; N: 60; Pv: '100000'; Fv: '5000'; T: ptEnd),
+    (R: '0.006666666666666667'; N: 360; Pv: '250000'; Fv: '0'; T: ptEnd),
+    (R: '0.02'; N: 10; Pv: '10000'; Fv: '1000'; T: ptBegin),
+    (R: '-0.01'; N: 12; Pv: '5000'; Fv: '0'; T: ptEnd),
+    (R: '1E-30'; N: 100; Pv: '1000000'; Fv: '250'; T: ptEnd),
+    (R: '0.1'; N: 5; Pv: '-7500'; Fv: '20000'; T: ptBegin));
+  EffX: array[0..3] of string = ('0.0525', '1E-25', '2.5', '0.000001');
+  EffK: array[0..3] of Int64 = (1, 4, 12, 365);
+var
+  si, pi, k, xi: Integer;
+  m: TRoundingMode;
+  c, w: TMathContext;
+  r, pv, fv, pmt, nDec, e: TBigDecimal;
+  per: Int64;
+  sumI, sumP: TBigDecimal;
+  ps: array[0..1] of Integer = (40, 200);
+  GDefaultGuard: TSuspendDefault;
+begin
+  TMathContext.ClearDefault;
+  { Exact operator semantics for the reference products. }
+  GDefaultGuard.Suspend;
+  for si := 0 to High(Shapes) do
+    for pi := 0 to 1 do
+      for m := rmUp to rmHalfEven do
+      begin
+        c := TMathContext.Make(ps[pi], m);
+        w := TMathContext.Make(ps[pi] + 30, rmHalfEven);
+        r := D(Shapes[si].R);
+        pv := D(Shapes[si].Pv);
+        fv := D(Shapes[si].Fv);
+        nDec := TBigDecimal.Create(Shapes[si].N);
+        pmt := PaymentXL(r, Shapes[si].N, pv, fv, Shapes[si].T, w);
+        CheckClose('pv shape ' + IntToStr(si),
+          PresentValueXL(r, Shapes[si].N, pmt, fv, Shapes[si].T, c), pv, ps[pi]);
+        CheckClose('fv shape ' + IntToStr(si),
+          FutureValueXL(r, Shapes[si].N, pmt, pv, Shapes[si].T, c), fv, ps[pi]);
+        CheckClose('nper shape ' + IntToStr(si),
+          PeriodCountXL(r, pmt, pv, fv, Shapes[si].T, c), nDec, ps[pi]);
+        CheckClose('rate shape ' + IntToStr(si),
+          PeriodicRateXL(Shapes[si].N, pmt, pv, fv, Shapes[si].T, D('0.1'), c), r, ps[pi]);
+        if (fv.IsZero) and (ps[pi] = 40) then
+        begin
+          sumI := TBigDecimal.Zero;
+          sumP := TBigDecimal.Zero;
+          for per := 1 to Shapes[si].N do
+          begin
+            sumI := sumI + InterestPaymentXL(r, per, Shapes[si].N, pv, fv, Shapes[si].T, c);
+            sumP := sumP + PrincipalPaymentXL(r, per, Shapes[si].N, pv, fv, Shapes[si].T, c);
+          end;
+          CheckClose('sumP shape ' + IntToStr(si), sumP, pv.Negate, ps[pi]);
+          CheckClose('sumIP shape ' + IntToStr(si), sumI + sumP,
+            PaymentXL(r, Shapes[si].N, pv, fv, Shapes[si].T, c) * nDec, ps[pi]);
+        end;
+      end;
+  for xi := 0 to High(EffX) do
+    for k := 0 to High(EffK) do
+      for pi := 0 to 1 do
+        for m := rmUp to rmHalfEven do
+        begin
+          c := TMathContext.Make(ps[pi], m);
+          w := TMathContext.Make(ps[pi] + 30, rmHalfEven);
+          e := EffectiveRateXL(D(EffX[xi]), EffK[k], w);
+          CheckClose('nom-eff ' + EffX[xi] + '/' + IntToStr(EffK[k]),
+            NominalRateXL(e, EffK[k], c), D(EffX[xi]), ps[pi]);
+        end;
+end;
+
+procedure TLibraryTests.TestExcelEdges;
+var
+  c, c40, w70: TMathContext;
+  r, pmt, i: TBigDecimal;
+begin
+  TMathContext.ClearDefault;
+  c := TMathContext.Make(40, rmHalfEven);
+  // zero rate for each payment function
+  AssertTrue(PaymentXL(D('0'), 10, D('1000'), D('500'), c) = D('-150'));
+  AssertTrue(PresentValueXL(D('0'), 12, D('-100'), D('-500'), c) = D('1700'));
+  AssertTrue(FutureValueXL(D('0'), 12, D('-100'), D('2000'), c) = D('-800'));
+  AssertTrue(PeriodCountXL(D('0'), D('-100'), D('-1000'), D('10000'), c) = D('90'));
+  AssertTrue(InterestPaymentXL(D('0'), 3, 10, D('1000'), c).IsZero);
+  AssertTrue(PrincipalPaymentXL(D('0'), 3, 10, D('1000'), D('500'), c) = D('-150'));
+  AssertTrue(PeriodicRateXL(12, D('-100'), D('1000'), D('200'), c).IsZero);
+  // one compounding period is the identity
+  AssertTrue(EffectiveRateXL(D('0.0525'), 1, c) = D('0.0525'));
+  AssertTrue(NominalRateXL(D('0.0535'), 1, c) = D('0.0535'));
+  // first period of an annuity due
+  r := D('0.006666666666666667');
+  i := InterestPaymentXL(r, 1, 360, D('250000'), D('0'), ptBegin, c);
+  AssertTrue(i.IsZero);
+  AssertTrue(PrincipalPaymentXL(r, 1, 360, D('250000'), D('0'), ptBegin, c) =
+    PaymentXL(r, 360, D('250000'), D('0'), ptBegin, c));
+  // a single period has closed forms
+  AssertTrue(PeriodicRateXL(1, D('-100'), D('1000'), D('-970'), ptEnd, c) = D('0.07'));
+  AssertTrue(PeriodicRateXL(1, D('-100'), D('1000'), D('-855'), ptBegin, c) = D('-0.05'));
+  pmt := PaymentXL(D('0.05'), 1, D('1000'), D('50'), ptEnd, c);
+  CheckClose('nper n=1', PeriodCountXL(D('0.05'), pmt, D('1000'), D('50'), ptEnd, c),
+    D('1'), 40);
+  // a large period count round-trips
+  c40 := TMathContext.Make(40, rmHalfEven);
+  w70 := TMathContext.Make(70, rmHalfEven);
+  pmt := PaymentXL(D('0.005'), 100000, D('100000'), w70);
+  CheckClose('pv n=1e5', PresentValueXL(D('0.005'), 100000, pmt, w70).Round(c40),
+    D('100000'), 40);
+  pmt := PaymentXL(D('0.005'), 10000, D('100000'), w70);
+  CheckClose('nper n=1e4', PeriodCountXL(D('0.005'), pmt, D('100000'), c40),
+    TBigDecimal.Create(Int64(10000)), 40);
+  // a tiny rate round-trips through the logarithm
+  pmt := PaymentXL(D('1E-30'), 100, D('1000000'), D('250'), w70);
+  CheckClose('nper tiny r',
+    PeriodCountXL(D('1E-30'), pmt, D('1000000'), D('250'), c40), D('100'), 40);
+  // a negative present value pays out
+  pmt := PaymentXL(D('0.05'), 10, D('-1000'), c);
+  AssertTrue(pmt.Sign > 0);
+  CheckClose('pv negative', PresentValueXL(D('0.05'), 10, pmt, c), D('-1000'), 40);
+end;
+
+procedure TLibraryTests.TestExcelErrors;
+var
+  c: TMathContext;
+begin
+  TMathContext.ClearDefault;
+  c := TMathContext.Make(20, rmHalfEven);
+  try PaymentXL(D('0.05'), 0, D('1000'), c); Fail('nper 0');
+  except on EBigDecimalDivByZero do; end;
+  try PaymentXL(D('0.05'), -5, D('1000'), c); Fail('nper negative');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(0, D('-100'), D('1000'), c); Fail('rate nper 0');
+  except on EBigDecimalDivByZero do; end;
+  try PeriodicRateXL(-3, D('-100'), D('1000'), c); Fail('rate nper negative');
+  except on EBigDecimalDomain do; end;
+  try InterestPaymentXL(D('0.05'), 0, 10, D('1000'), c); Fail('per 0');
+  except on EBigDecimalDomain do; end;
+  try InterestPaymentXL(D('0.05'), 11, 10, D('1000'), c); Fail('per over n');
+  except on EBigDecimalDomain do; end;
+  try PrincipalPaymentXL(D('0.05'), 0, 10, D('1000'), c); Fail('ppmt per 0');
+  except on EBigDecimalDomain do; end;
+  try PaymentXL(D('-1'), 10, D('1000'), c); Fail('rate -1 pmt');
+  except on EBigDecimalDomain do; end;
+  try PresentValueXL(D('-1.5'), 10, D('100'), c); Fail('rate below -1 pv');
+  except on EBigDecimalDomain do; end;
+  try FutureValueXL(D('-1'), 10, D('100'), c); Fail('rate -1 fv');
+  except on EBigDecimalDomain do; end;
+  try PeriodCountXL(D('-1'), D('-100'), D('1000'), c); Fail('rate -1 nper');
+  except on EBigDecimalDomain do; end;
+  try InterestPaymentXL(D('-1'), 1, 10, D('1000'), c); Fail('rate -1 ipmt');
+  except on EBigDecimalDomain do; end;
+  try PrincipalPaymentXL(D('-1'), 1, 10, D('1000'), c); Fail('rate -1 ppmt');
+  except on EBigDecimalDomain do; end;
+  try PeriodCountXL(D('0.01'), D('0'), D('1000'), D('1000'), c); Fail('nper no solution');
+  except on EBigDecimalDomain do; end;
+  try PeriodCountXL(D('0'), D('0'), D('1000'), c); Fail('nper zero pmt');
+  except on EBigDecimalDivByZero do; end;
+  try PeriodicRateXL(12, D('-100'), D('-1000'), D('-500'), c); Fail('rate same sign');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(12, D('-100'), D('0'), D('0'), c); Fail('rate pv=fv=0');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(10, D('0'), D('0'), D('100'), c); Fail('rate pmt=pv=0');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(10, D('0'), D('1000'), D('500'), c); Fail('rate negative ratio');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(2, D('1'), D('1'), D('-1'), ptEnd, D('0.1'), c);
+    Fail('rate no convergence');
+  except on EBigDecimalNoConvergence do; end;
+  try EffectiveRateXL(D('0'), 4, c); Fail('effect zero');
+  except on EBigDecimalDomain do; end;
+  try EffectiveRateXL(D('-0.01'), 4, c); Fail('effect negative');
+  except on EBigDecimalDomain do; end;
+  try EffectiveRateXL(D('0.05'), 0, c); Fail('effect npery 0');
+  except on EBigDecimalDomain do; end;
+  try NominalRateXL(D('0'), 4, c); Fail('nominal zero');
+  except on EBigDecimalDomain do; end;
+  try NominalRateXL(D('-0.01'), 4, c); Fail('nominal negative');
+  except on EBigDecimalDomain do; end;
+  try NominalRateXL(D('0.05'), 0, c); Fail('nominal npery 0');
+  except on EBigDecimalDomain do; end;
+  try PaymentXL(D('0.05'), 10, D('1000'), Unlimited); Fail('unlimited pmt');
+  except on EBigDecimalDomain do; end;
+  try PeriodicRateXL(12, D('-100'), D('1000'), Unlimited); Fail('unlimited rate');
+  except on EBigDecimalDomain do; end;
+  try EffectiveRateXL(D('0.05'), 4, Unlimited); Fail('unlimited effect');
+  except on EBigDecimalDomain do; end;
+end;
+
+procedure TLibraryTests.TestExcelCoreVectors;
+var
+  sl: TStringList;
+  i: Integer;
+  f: TStringArray;
+  got, exp: string;
+  cc: TMathContext;
+begin
+  TMathContext.ClearDefault;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(VecFile('pmt'));
+    for i := 0 to sl.Count - 1 do
+    begin
+      if sl[i] = '' then Continue;
+      f := sl[i].Split([#9]);
+      cc := TMathContext.Make(StrToInt(f[6]), ParseMode(f[7]));
+      got := PaymentXL(D(f[1]), StrToInt64(f[2]), D(f[3]), D(f[4]), TimingOf(f[5]), cc).ToString;
+      exp := f[8];
+      if not SameVec(got, exp) then Fail('pmt ' + sl[i] + ' GOT ' + got);
+    end;
+  finally
+    sl.Free;
+  end;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(VecFile('nper'));
+    for i := 0 to sl.Count - 1 do
+    begin
+      if sl[i] = '' then Continue;
+      f := sl[i].Split([#9]);
+      cc := TMathContext.Make(StrToInt(f[6]), ParseMode(f[7]));
+      got := PeriodCountXL(D(f[1]), D(f[2]), D(f[3]), D(f[4]), TimingOf(f[5]), cc).ToString;
+      exp := f[8];
+      if not SameVec(got, exp) then Fail('nper ' + sl[i] + ' GOT ' + got);
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+procedure TLibraryTests.TestExcelSplitVectors;
+var
+  sl: TStringList;
+  i: Integer;
+  f: TStringArray;
+  got, exp: string;
+  cc: TMathContext;
+begin
+  TMathContext.ClearDefault;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(VecFile('effect'));
+    for i := 0 to sl.Count - 1 do
+    begin
+      if sl[i] = '' then Continue;
+      f := sl[i].Split([#9]);
+      cc := TMathContext.Make(StrToInt(f[3]), ParseMode(f[4]));
+      got := EffectiveRateXL(D(f[1]), StrToInt64(f[2]), cc).ToString;
+      exp := f[5];
+      if not SameVec(got, exp) then Fail('effect ' + sl[i] + ' GOT ' + got);
+    end;
+  finally
+    sl.Free;
+  end;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(VecFile('nominal'));
+    for i := 0 to sl.Count - 1 do
+    begin
+      if sl[i] = '' then Continue;
+      f := sl[i].Split([#9]);
+      cc := TMathContext.Make(StrToInt(f[3]), ParseMode(f[4]));
+      got := NominalRateXL(D(f[1]), StrToInt64(f[2]), cc).ToString;
+      exp := f[5];
+      if not SameVec(got, exp) then Fail('nominal ' + sl[i] + ' GOT ' + got);
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+procedure TLibraryTests.TestPeriodicRate;
+var
+  sl: TStringList;
+  i: Integer;
+  f: TStringArray;
+  got, exp: string;
+  cc: TMathContext;
+  c: TMathContext;
+  r1, r2: TBigDecimal;
+begin
+  TMathContext.ClearDefault;
+  c := TMathContext.Make(40, rmHalfEven);
+  // two sign changes: the guess selects the root, both solve the equation
+  r1 := PeriodicRateXL(2, D('-5'), D('2'), D('7'), ptEnd, D('0.1'), c);
+  AssertTrue(r1 = D('-0.5'));
+  r2 := PeriodicRateXL(2, D('-5'), D('2'), D('7'), ptEnd, D('0.9'), c);
+  AssertTrue(r2 = D('1'));
+  AssertTrue(FutureValueXL(r1, 2, D('-5'), D('2'), ptEnd, c) = D('7'));
+  AssertTrue(FutureValueXL(r2, 2, D('-5'), D('2'), ptEnd, c) = D('7'));
+  AssertTrue(PeriodicRateXL(2, D('-5'), D('2'), D('7'), ptEnd, c) = D('-0.5'));
+  AssertTrue(PeriodicRateXL(2, D('-5'), D('2'), D('7'), c) = D('-0.5'));
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(VecFile('ratexl'));
+    for i := 0 to sl.Count - 1 do
+    begin
+      if sl[i] = '' then Continue;
+      f := sl[i].Split([#9]);
+      cc := TMathContext.Make(StrToInt(f[7]), ParseMode(f[8]));
+      got := PeriodicRateXL(StrToInt64(f[1]), D(f[2]), D(f[3]), D(f[4]),
+        TimingOf(f[5]), D(f[6]), cc).ToString;
+      exp := f[9];
+      if not SameVec(got, exp) then Fail('ratexl ' + sl[i] + ' GOT ' + got);
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+procedure TLibraryTests.TestExcelDefaultContext;
+var
+  S: TMathContextScope;
+  c: TMathContext;
+  r: TBigDecimal;
+begin
+  c := TMathContext.Make(30, rmDown);
+  S.Enter(c);
+  r := D('0.006666666666666667');
+  AssertTrue(PaymentXL(r, 360, D('250000')).Identical(PaymentXL(r, 360, D('250000'), c)));
+  AssertTrue(PaymentXL(r, 360, D('250000'), D('100')).Identical(
+    PaymentXL(r, 360, D('250000'), D('100'), c)));
+  AssertTrue(PaymentXL(r, 360, D('250000'), D('100'), ptBegin).Identical(
+    PaymentXL(r, 360, D('250000'), D('100'), ptBegin, c)));
+  AssertTrue(PresentValueXL(r, 360, D('-1500')).Identical(PresentValueXL(r, 360, D('-1500'), c)));
+  AssertTrue(PresentValueXL(r, 360, D('-1500'), D('100')).Identical(
+    PresentValueXL(r, 360, D('-1500'), D('100'), c)));
+  AssertTrue(PresentValueXL(r, 360, D('-1500'), D('100'), ptBegin).Identical(
+    PresentValueXL(r, 360, D('-1500'), D('100'), ptBegin, c)));
+  AssertTrue(FutureValueXL(r, 360, D('-1500')).Identical(FutureValueXL(r, 360, D('-1500'), c)));
+  AssertTrue(FutureValueXL(r, 360, D('-1500'), D('5000')).Identical(
+    FutureValueXL(r, 360, D('-1500'), D('5000'), c)));
+  AssertTrue(FutureValueXL(r, 360, D('-1500'), D('5000'), ptBegin).Identical(
+    FutureValueXL(r, 360, D('-1500'), D('5000'), ptBegin, c)));
+  AssertTrue(PeriodCountXL(r, D('-1500'), D('200000')).Identical(
+    PeriodCountXL(r, D('-1500'), D('200000'), c)));
+  AssertTrue(PeriodCountXL(r, D('-1500'), D('200000'), D('100')).Identical(
+    PeriodCountXL(r, D('-1500'), D('200000'), D('100'), c)));
+  AssertTrue(PeriodCountXL(r, D('-1500'), D('200000'), D('100'), ptBegin).Identical(
+    PeriodCountXL(r, D('-1500'), D('200000'), D('100'), ptBegin, c)));
+  AssertTrue(InterestPaymentXL(r, 7, 360, D('250000')).Identical(
+    InterestPaymentXL(r, 7, 360, D('250000'), c)));
+  AssertTrue(InterestPaymentXL(r, 7, 360, D('250000'), D('100')).Identical(
+    InterestPaymentXL(r, 7, 360, D('250000'), D('100'), c)));
+  AssertTrue(InterestPaymentXL(r, 7, 360, D('250000'), D('100'), ptBegin).Identical(
+    InterestPaymentXL(r, 7, 360, D('250000'), D('100'), ptBegin, c)));
+  AssertTrue(PrincipalPaymentXL(r, 7, 360, D('250000')).Identical(
+    PrincipalPaymentXL(r, 7, 360, D('250000'), c)));
+  AssertTrue(PrincipalPaymentXL(r, 7, 360, D('250000'), D('100')).Identical(
+    PrincipalPaymentXL(r, 7, 360, D('250000'), D('100'), c)));
+  AssertTrue(PrincipalPaymentXL(r, 7, 360, D('250000'), D('100'), ptBegin).Identical(
+    PrincipalPaymentXL(r, 7, 360, D('250000'), D('100'), ptBegin, c)));
+  AssertTrue(PeriodicRateXL(48, D('-200'), D('8000')).Identical(
+    PeriodicRateXL(48, D('-200'), D('8000'), c)));
+  AssertTrue(PeriodicRateXL(48, D('-200'), D('8000'), D('100')).Identical(
+    PeriodicRateXL(48, D('-200'), D('8000'), D('100'), c)));
+  AssertTrue(PeriodicRateXL(48, D('-200'), D('8000'), D('100'), ptBegin).Identical(
+    PeriodicRateXL(48, D('-200'), D('8000'), D('100'), ptBegin, c)));
+  AssertTrue(PeriodicRateXL(48, D('-200'), D('8000'), D('100'), ptBegin, D('0.2')).Identical(
+    PeriodicRateXL(48, D('-200'), D('8000'), D('100'), ptBegin, D('0.2'), c)));
+  AssertTrue(EffectiveRateXL(D('0.0525'), 4).Identical(EffectiveRateXL(D('0.0525'), 4, c)));
+  AssertTrue(NominalRateXL(D('0.0535'), 4).Identical(NominalRateXL(D('0.0535'), 4, c)));
 end;
 
 initialization

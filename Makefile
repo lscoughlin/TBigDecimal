@@ -5,13 +5,18 @@ COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FEbin
 DEBUG    = $(COMMON) -FUlib/debug -g -gl -Cr -Co -Ct -O1
 RELEASE  = $(COMMON) -FUlib/release -O3
 
-.PHONY: test bench benchsmall benchcompare benchbcd profile clean refs vectors heaptest
+.PHONY: test bench benchsmall benchcompare benchbcd benchparse benchfinancial benchdivmod profile clean refs vectors heaptest
 
 refs:
 	sh tools/fetchrefs.sh
 
 vectors:
-	@test -f tests/vectors/add.txt || (sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000)
+	@for f in add pmt nper ratexl effect nominal; do \
+	  if ! test -f tests/vectors/$$f.txt; then \
+	    sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000; \
+	    break; \
+	  fi; \
+	done
 
 test: refs vectors
 	@mkdir -p lib/debug bin
@@ -53,6 +58,21 @@ profile:
 	  grep -A12 'Sort by top of stack' bin/profile-$$op.txt | tail -12 | cut -c1-110; \
 	  kill $$! 2>/dev/null; wait 2>/dev/null; \
 	done
+
+benchparse:
+	@mkdir -p lib/release bin
+	$(FPC) $(RELEASE) bench/BenchParseFormat.lpr
+	./bin/BenchParseFormat
+
+benchfinancial:
+	@mkdir -p lib/release bin
+	$(FPC) $(RELEASE) bench/BenchFinancial.lpr
+	./bin/BenchFinancial
+
+benchdivmod:
+	@mkdir -p lib/release bin
+	$(FPC) $(RELEASE) bench/BenchDivMod.lpr
+	./bin/BenchDivMod
 
 clean:
 	rm -rf lib bin

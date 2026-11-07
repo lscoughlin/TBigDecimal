@@ -28,6 +28,11 @@ type
   EBigDecimalNoContext = class(EBigDecimal);
   EBigDecimalPrecision = class(EBigDecimal);
   EBigDecimalDomain = class(EBigDecimal);
+  EBigDecimalNoConvergence = class(EBigDecimal);
+
+  { Payment timing of the Excel annuity functions: end of period (type 0)
+    or beginning of period (type 1). }
+  TPaymentTiming = (ptEnd, ptBegin);
 
   TRoundingMode = (rmUp, rmDown, rmCeiling, rmFloor,
                    rmHalfUp, rmHalfDown, rmHalfEven, rmUnnecessary);
@@ -67,6 +72,7 @@ type
   private
     FPrev: TMathContext;
     FHad: Boolean;
+    FPrevExact: Boolean;
     FActive: Boolean;
   public
     procedure Suspend;
@@ -77,9 +83,9 @@ type
 const
   { Version of the library (major.minor.release). The Lazarus package
     lazarus/TBigDecimal.lpk carries the same number. }
-  BigDecimalVersion = '0.2.0';
+  BigDecimalVersion = '0.3.0';
   BigDecimalVersionMajor = 0;
-  BigDecimalVersionMinor = 2;
+  BigDecimalVersionMinor = 3;
   BigDecimalVersionRelease = 0;
 
   Decimal32: TMathContext = (Precision: 7; RoundingMode: rmHalfEven);
@@ -91,21 +97,37 @@ var
   { Largest digit count that an exact result may have (Pow, Factorial, ...). }
   MaxExactDigits: Int64 = 10000000;
 
+  { Fallback for the * and / operators without a default context. When True
+    (the default), they round to 34 significant digits, half-even. When False,
+    they stay exact: * keeps the full product and / raises
+    EBigDecimalNonTerminating on a quotient without a finite expansion. }
+  NoContextFallback128: Boolean = True;
+
 { Returns the default context of the calling thread, or Unlimited-with-flag
   semantics through HasDefault. }
 function EffectiveContext(out C: TMathContext): Boolean; inline;
+
+{ True while a TSuspendDefault is active. Operators stay exact then, even
+  with NoContextFallback128 set. }
+function ExactOpsActive: Boolean; inline;
 
 implementation
 
 threadvar
   GDefaultContext: TMathContext;
   GHasDefaultContext: Boolean;
+  GExactOps: Boolean;
 
 function EffectiveContext(out C: TMathContext): Boolean; inline;
 begin
   Result := GHasDefaultContext;
   if Result then
     C := GDefaultContext;
+end;
+
+function ExactOpsActive: Boolean; inline;
+begin
+  Result := GExactOps;
 end;
 
 class function TMathContext.Make(APrecision: Integer; AMode: TRoundingMode): TMathContext;
@@ -144,8 +166,10 @@ begin
   if FActive then Exit;
   FHad := GHasDefaultContext;
   FPrev := GDefaultContext;
+  FPrevExact := GExactOps;
   FActive := True;
   GHasDefaultContext := False;
+  GExactOps := True;
 end;
 
 class operator TSuspendDefault.Initialize(var S: TSuspendDefault);
@@ -160,6 +184,7 @@ begin
     S.FActive := False;
     GDefaultContext := S.FPrev;
     GHasDefaultContext := S.FHad;
+    GExactOps := S.FPrevExact;
   end;
 end;
 

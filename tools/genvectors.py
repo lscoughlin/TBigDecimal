@@ -338,8 +338,348 @@ def write_fin():
     for name, r in fin_vectors().items():
         w(name, r)
 
+
+# ---------------------------------------------------------------------------
+# Excel annuity and rate vectors
+# Oracle: Python decimal at 300 digits, certified at 340 digits. A row is kept
+# only when both precisions round to the same expected value, so rows near a
+# rounding boundary (including true-integer NPER values) never reach the file.
+# ---------------------------------------------------------------------------
+
+def xl_ctx(prec):
+    return Context(prec=prec, Emax=10**9, Emin=-10**9, rounding=decimal.ROUND_HALF_EVEN)
+
+def xl_growth(ctx, r, n):
+    return ctx.power(ctx.add(1, r), n)
+
+# All oracle steps use the given context. Plain operators and unary minus
+# would fall back to the 28-digit default context.
+
+def xl_pmt(ctx, r, n, pv, fv, t):
+    if r == 0:
+        return ctx.minus(ctx.divide(ctx.add(pv, fv), n))
+    g = xl_growth(ctx, r, n)
+    a = ctx.add(1, ctx.multiply(r, t))
+    return ctx.minus(ctx.divide(ctx.multiply(ctx.add(ctx.multiply(pv, g), fv), r),
+                               ctx.multiply(a, ctx.subtract(g, 1))))
+
+def xl_nper(ctx, r, pmt, pv, fv, t):
+    if r == 0:
+        return ctx.minus(ctx.divide(ctx.add(pv, fv), pmt))
+    a = ctx.add(1, ctx.multiply(r, t))
+    num = ctx.subtract(ctx.multiply(pmt, a), ctx.multiply(fv, r))
+    den = ctx.add(ctx.multiply(pmt, a), ctx.multiply(pv, r))
+    return ctx.divide(ctx.ln(ctx.divide(num, den)), ctx.ln(ctx.add(1, r)))
+
+def xl_fv(ctx, r, n, pmt, pv, t):
+    if r == 0:
+        return ctx.minus(ctx.add(pv, ctx.multiply(pmt, n)))
+    g = xl_growth(ctx, r, n)
+    a = ctx.add(1, ctx.multiply(r, t))
+    return ctx.minus(ctx.add(ctx.multiply(pv, g),
+                             ctx.divide(ctx.multiply(ctx.multiply(pmt, a), ctx.subtract(g, 1)), r)))
+
+def xl_rate_newton(ctx, n, pmt, pv, fv, t, guess):
+    r = ctx.create_decimal(guess)
+    tol = Decimal(10) ** -(ctx.prec - 20)
+    for _ in range(80):
+        if r == 0:
+            f = ctx.add(ctx.add(pv, fv), ctx.multiply(pmt, n))
+            half = ctx.divide(ctx.subtract(n, 1), 2)
+            df = ctx.add(ctx.multiply(pv, n),
+                         ctx.multiply(ctx.multiply(pmt, n), ctx.add(half, t)))
+        else:
+            g = xl_growth(ctx, r, n)
+            gm1 = ctx.subtract(g, 1)
+            u = ctx.add(1, ctx.multiply(r, t))
+            h = ctx.divide(gm1, r)
+            gp = ctx.divide(ctx.multiply(g, n), ctx.add(1, r))
+            dh = ctx.divide(ctx.subtract(ctx.multiply(r, gp), gm1), ctx.multiply(r, r))
+            f = ctx.add(ctx.add(ctx.multiply(pv, g), ctx.multiply(ctx.multiply(pmt, u), h)), fv)
+            df = ctx.add(ctx.multiply(pv, gp), ctx.multiply(ctx.multiply(pmt, u), dh))
+            if t:
+                df = ctx.add(df, ctx.multiply(pmt, h))
+        if f == 0:
+            return r
+        if df == 0:
+            return None
+        dr = ctx.divide(f, df)
+        if abs(dr) < tol:
+            return ctx.subtract(r, dr)
+        step = dr
+        for _ in range(60):
+            cand = ctx.subtract(r, step)
+            if cand > -1:
+                break
+            step = ctx.divide(step, 2)
+        else:
+            return None
+        r = cand
+    return None
+
+def xl_certified(fn, p, mode):
+    # Returns (expected, fine value). Callers also apply xl_guarded: dual
+    # agreement alone cannot see a true value that hugs a boundary closer
+    # than the library working precision.
+    H = xl_ctx(300)
+    H2 = xl_ctx(340)
+    try:
+        v1 = fn(H)
+        v2 = fn(H2)
+    except Exception:
+        return None, None
+    if v1 is None or v2 is None:
+        return None, None
+    if v1.is_nan() or v2.is_nan():
+        return None, None
+    e1 = round_to(v1, p, mode)
+    e2 = round_to(v2, p, mode)
+    if e1.is_zero() and e2.is_zero():
+        return '0', v2
+    if str(e1) != str(e2):
+        return None, None
+    return str(e1), v2
+
+def xl_certified3(fn, p, mode):
+    H = xl_ctx(300)
+    H2 = xl_ctx(340)
+    H3 = xl_ctx(600)
+    try:
+        v1 = fn(H)
+        v2 = fn(H2)
+        v3 = fn(H3)
+    except Exception:
+        return None, None
+    if v1 is None or v2 is None or v3 is None:
+        return None, None
+    if v1.is_nan() or v2.is_nan() or v3.is_nan():
+        return None, None
+    e1 = round_to(v1, p, mode)
+    e2 = round_to(v2, p, mode)
+    e3 = round_to(v3, p, mode)
+    if e1.is_zero() and e2.is_zero() and e3.is_zero():
+        return '0', v3
+    if not (str(e1) == str(e2) == str(e3)):
+        return None, None
+    return str(e1), v3
+
+def xl_guarded(vfine, p):
+    # True when the fine solve sits at least a thousandth of an ulp from
+    # every p-digit decision boundary. All arithmetic runs wide.
+    with localcontext(xl_ctx(700)):
+        lo = round_to(vfine, p, 'rmDown')
+        hi = round_to(vfine, p, 'rmUp')
+        if vfine == lo or vfine == hi:
+            return False
+        ulp = abs(hi - lo)
+        if ulp == 0:
+            return False
+        mid = (lo + hi) / 2
+        gap = min(abs(vfine - lo), abs(hi - vfine), abs(vfine - mid))
+        return gap >= ulp * Decimal('1E-3')
+
+def xl_rate():
+    v = rnd.choice(['0.08', '0.05', '0.12', '0.1', '0.06', '0.0525',
+                    str(rnd.randint(1, 3000) / 10 ** rnd.randint(3, 6)),
+                    str(rnd.randint(1, 999) / 10 ** rnd.randint(7, 12)),
+                    '1E-30', '2.5E-9', '0.006666666666666667', '0']) \
+        if rnd.random() < 0.5 else str((Decimal(rnd.randint(1, 9000)) / 10000).quantize(Decimal(10) ** -rnd.randint(2, 8)))
+    if v != '0' and rnd.random() < 0.2:
+        v = '-' + v
+    return v
+
+def xl_money():
+    if rnd.random() < 0.15:
+        return '0'
+    v = Decimal(rnd.randint(1, 10**9)) / Decimal(10) ** rnd.randint(0, 4)
+    return str(-v if rnd.random() < 0.5 else v)
+
+def xl_prec():
+    r = rnd.random()
+    if r < 0.1:
+        return rnd.choice([100, 150, 200])
+    return rnd.choice([5, 9, 16, 34, 60])
+
+def xl_prec_r():
+    # ratexl roots hug the planted value, which carries 64 decimals,
+    # so precision stays below that depth (see the ratexl comment)
+    if rnd.random() < 0.1:
+        return 50
+    return rnd.choice([5, 9, 16, 34])
+
+def xl_rt_long(short, neg=False):
+    # A planted root needs more digits than any row precision, else the
+    # true root sits on a rounding boundary and no implementation can
+    # side it by string compare. Built by string surgery, so no context
+    # rounds the tail.
+    tail = str(rnd.randint(1, 10**30 - 1)).zfill(30)
+    s = str(short)
+    if '.' in s:
+        head, frac = s.split('.')
+    else:
+        head, frac = s, ''
+    frac = ((frac + '0' * 34)[:34] + tail)[:64]
+    return Decimal(('-' if neg else '') + head + '.' + frac)
+
+def xl_vectors():
+    rows = {k: [] for k in ('pmt', 'nper', 'ratexl', 'effect', 'nominal')}
+    # --- pmt ---
+    made, guard = 0, 0
+    while made < 200 and guard < 4000:
+        guard += 1
+        rs, ns = xl_rate(), rnd.randint(1, 360) if rnd.random() < 0.95 else rnd.randint(361, 5000)
+        pvs, fvs, t = xl_money(), (xl_money() if rnd.random() < 0.4 else '0'), rnd.randint(0, 1)
+        if Decimal(rs) <= -1:
+            continue
+        p, m = xl_prec(), rnd.choice(MODE_NAMES)
+        exp, vfine = xl_certified(lambda H, rs=rs, ns=ns, pvs=pvs, fvs=fvs, t=t:
+                                  xl_pmt(H, H.create_decimal(rs), ns, H.create_decimal(pvs),
+                                         H.create_decimal(fvs), t), p, m)
+        if exp is None:
+            continue
+        if exp != '0' and not xl_guarded(vfine, p):
+            continue
+        rows['pmt'].append(('pmt', rs, ns, pvs, fvs, t, p, m, exp))
+        made += 1
+    # --- nper ---
+    made, guard = 0, 0
+    while made < 200 and guard < 8000:
+        guard += 1
+        r = Decimal(xl_rate())
+        if r <= -1:
+            continue
+        pmt = Decimal(xl_money())
+        pv = Decimal(rnd.randint(1, 10**7)) / Decimal(10) ** rnd.randint(0, 2)
+        if rnd.random() < 0.3:
+            pv = -pv
+        fv = Decimal(xl_money()) if rnd.random() < 0.5 else Decimal(0)
+        t = rnd.randint(0, 1)
+        if r == 0 and pmt == 0:
+            continue
+        H = xl_ctx(300)
+        try:
+            if r == 0:
+                v = H.minus(H.divide(H.add(H.create_decimal(pv), H.create_decimal(fv)),
+                                     H.create_decimal(pmt)))
+            else:
+                a = H.add(1, H.multiply(H.create_decimal(r), t))
+                num = H.subtract(H.multiply(H.create_decimal(pmt), a), H.multiply(H.create_decimal(fv), H.create_decimal(r)))
+                den = H.add(H.multiply(H.create_decimal(pmt), a), H.multiply(H.create_decimal(pv), H.create_decimal(r)))
+                if num == 0 or (num > 0) != (den > 0):
+                    continue
+                v = H.divide(H.ln(H.divide(num, den)), H.ln(H.add(1, H.create_decimal(r))))
+            # true-integer values are untestable by string compare
+            if abs(v - v.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)) < Decimal(10) ** -270:
+                continue
+        except Exception:
+            continue
+        p, m = xl_prec(), rnd.choice(MODE_NAMES)
+        exp, vfine = xl_certified(lambda H, r=r, pmt=pmt, pv=pv, fv=fv, t=t:
+                                  xl_nper(H, H.create_decimal(r), H.create_decimal(pmt),
+                                          H.create_decimal(pv), H.create_decimal(fv), t), p, m)
+        if exp is None:
+            continue
+        if exp != '0' and not xl_guarded(vfine, p):
+            continue
+        rows['nper'].append(('nper', str(r), str(pmt), str(pv), str(fv), t, p, m, exp))
+        made += 1
+    # --- ratexl: forward-built rows with a known root near the oracle solve ---
+    made, guard = 0, 0
+    while made < 120 and guard < 6000:
+        guard += 1
+        n = rnd.randint(1, 360)
+        t = rnd.randint(0, 1)
+        shape = rnd.random()
+        if shape < 0.1:
+            pmt, pv = Decimal(0), Decimal(rnd.randint(1, 10**6)) / 100
+            if rnd.random() < 0.3:
+                rt = xl_rt_long(Decimal(rnd.randint(1, 1000)) / 10000, True)
+            else:
+                rt = xl_rt_long(Decimal(rnd.randint(1, 2000)) / 10000)
+            if rt <= -1 or rt == 0:
+                continue
+        elif shape < 0.2:
+            rt = xl_rt_long(Decimal(rnd.randint(1, 500)) / 100000)
+            pmt = -(Decimal(rnd.randint(1, 10**5)) / 100)
+            pv = Decimal(rnd.randint(1, 10**7)) / 100
+        else:
+            rt = xl_rt_long(Decimal(rnd.randint(1, 6000)) / 10000)
+            if rnd.random() < 0.25:
+                rt = xl_rt_long(Decimal(rnd.randint(1, 4000)) / 10000, True)
+            if rt <= -1 or rt == 0 or abs(rt) < Decimal('1E-8'):
+                continue
+            pmt = Decimal(xl_money())
+            pv = Decimal(xl_money())
+            if pmt == 0 and pv == 0:
+                continue
+        H = xl_ctx(300)
+        try:
+            fv = xl_fv(H, H.create_decimal(rt), n, H.create_decimal(pmt),
+                       H.create_decimal(pv), t)
+        except Exception:
+            continue
+        if n == 1 and H.create_decimal(pmt) == 0 and H.create_decimal(pv) == 0:
+            continue
+        guess = '0.1'
+        p, m = xl_prec_r(), rnd.choice(MODE_NAMES)
+        exp, vfine = xl_certified3(lambda H, n=n, pmt=pmt, pv=pv, fv=fv, t=t:
+                                   xl_rate_newton(H, n, H.create_decimal(pmt), H.create_decimal(pv),
+                                                  H.create_decimal(fv), t, guess), p, m)
+        if exp is None or exp == '0':
+            continue
+        # the oracle solve must sit next to the planted root
+        if abs(Decimal(exp) - rt) > max(abs(rt), Decimal(1)) * Decimal(2) * (Decimal(10) ** -(p - 1)):
+            continue
+        # ... and clear of every rounding boundary
+        if not xl_guarded(vfine, p):
+            continue
+        rows['ratexl'].append(('ratexl', n, str(pmt), str(pv), str(fv), t, guess, p, m, exp))
+        made += 1
+    # --- effect / nominal ---
+    made, guard = 0, 0
+    while made < 120 and guard < 2000:
+        guard += 1
+        nom = Decimal(rnd.randint(1, 30000)) / Decimal(10) ** rnd.randint(4, 7)
+        if rnd.random() < 0.15:
+            nom = Decimal(rnd.randint(1, 999)) * Decimal(10) ** -rnd.randint(8, 35)
+        npery = rnd.randint(1, 365) if rnd.random() < 0.9 else rnd.randint(366, 8760)
+        p, m = xl_prec(), rnd.choice(MODE_NAMES)
+        exp, vfine = xl_certified(lambda H, nom=nom, npery=npery:
+                                  H.subtract(H.power(H.add(1, H.divide(H.create_decimal(nom), npery)), npery), 1),
+                                  p, m)
+        if exp is None:
+            continue
+        if exp != '0' and not xl_guarded(vfine, p):
+            continue
+        rows['effect'].append(('effect', str(nom), npery, p, m, exp))
+        made += 1
+    made, guard = 0, 0
+    while made < 120 and guard < 2000:
+        guard += 1
+        eff = Decimal(rnd.randint(1, 30000)) / Decimal(10) ** rnd.randint(4, 7)
+        if rnd.random() < 0.15:
+            eff = Decimal(rnd.randint(1, 999)) * Decimal(10) ** -rnd.randint(8, 35)
+        npery = rnd.randint(1, 365) if rnd.random() < 0.9 else rnd.randint(366, 8760)
+        p, m = xl_prec(), rnd.choice(MODE_NAMES)
+        exp, vfine = xl_certified(lambda H, eff=eff, npery=npery:
+                                  H.multiply(npery, H.subtract(
+                                      H.power(H.add(1, H.create_decimal(eff)),
+                                              H.divide(1, npery)), 1)), p, m)
+        if exp is None:
+            continue
+        if exp != '0' and not xl_guarded(vfine, p):
+            continue
+        rows['nominal'].append(('nominal', str(eff), npery, p, m, exp))
+        made += 1
+    return rows
+
+def write_xl():
+    for name, r in xl_vectors().items():
+        w(name, r)
+
 if __name__ == '__main__':
     main()
     write_transc(max(200, COUNT // 6))
     write_comb()
     write_fin()
+    write_xl()

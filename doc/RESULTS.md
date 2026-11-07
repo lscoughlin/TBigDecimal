@@ -3,6 +3,52 @@
 Machine: Apple Silicon (aarch64, macOS), Free Pascal 3.2.4 (3.2.4-rc2, 2026/08/26), `-O3`.
 Run `make bench` to regenerate. Numbers are microseconds unless noted.
 
+## Baseline of 2026-11-07 (monotonic best-of method)
+
+Machine: Liams-MacBook-Air.local, Apple Silicon arm64, macOS (Darwin 27.2.0),
+Free Pascal 3.2.4, `-O3`. Date: 2026-11-07.
+
+The method is the monotonic-clock method. Each bench program reads time
+from `Double(GetTickCount64) / 1000.0`, with the name and unit of the old
+`Secs` function kept. No bench program calls `Now`. A timed section runs
+through `TimeIt` with seven trials or `TimeBoth` with fifteen trials.
+Each row prints the minimum, the median and the spread. The spread is the
+interquartile range over the median, in percent. Trial counts are
+calibrated so that one trial takes at least 50 ms. All operands are
+built once before the timed loops. A global sink checksum of precision
+plus exponent accumulates over every timed result, so a call cannot be
+removed as dead code. The parse bench parses only in the parse rows.
+
+The baseline file `bench/baseline.csv` holds the minimum of three runs
+of `tools/benchcompare.sh write`, merged by
+`tools/benchcompare.sh merge`. A write run now captures timing rows
+from BenchAll, BenchParseFormat and BenchFinancial, plus the nine
+BenchSmall allocation rows. Timing rows hold the printed median of the
+run, in nanoseconds. The minimum value can be zero for very fast rows
+under the millisecond clock, so the median is the recorded value.
+The merged baseline holds 407 rows: 398 timing rows with non-zero
+nanoseconds and 9 allocation rows. The compare mode prints a row with
+a delta over 5 percent and exits nonzero when a row regresses over
+10 percent. A compare of the baseline with itself exits 0. A synthetic
+compare with one row raised by 15 percent prints the row and exits 1.
+
+The full bench set (`make bench benchsmall benchcompare benchbcd
+benchparse benchfinancial benchdivmod`) runs to completion on this
+machine. `make bench` ran three times. The factorial 100000 row spreads
+(range / swing, interquartile percent) are 4.9 / 8.1, 5.0 / 3.6 and
+14.0 / 11.3 in the three runs. The machine load is high during these
+runs (load average over 4), so the spread of the large factorial rows
+is not under 5 percent in every run. The min and median values are
+253 ms / 266 ms, 253 ms / 258 ms and 257 ms / 271 ms for the range form.
+
+The x86_64 kernel run is not recorded. This machine is arm64, so that
+run needs an x86_64 host.
+
+All rows below this section use the old method. The old method reads
+`Now * 86400`, uses ad hoc trial counts, and builds some operands inside
+the timed loops. Those rows stay for history and are not part of the
+2026-11-07 baseline.
+
 ## Division by 10^9 (bench/BenchDivMod.lpr, dependent carry chain)
 
 | Form | Time for 1.3 × 10^9 divisions |

@@ -896,6 +896,11 @@ begin
   begin
     if not TryMulFast(A, B, @c, Result) then Result := MulCoreX(A, B, @c);
   end
+  else if NoContextFallback128 and not ExactOpsActive then
+  begin
+    c := TMathContext.Make(34, rmHalfEven);
+    if not TryMulFast(A, B, @c, Result) then Result := MulCoreX(A, B, @c);
+  end
   else if not TryMulFast(A, B, nil, Result) then
     Result := MulCoreX(A, B, nil);
 end;
@@ -1650,6 +1655,11 @@ var
 begin
   if EffectiveContext(c) and (c.Precision > 0) then
     Result := A.Divide(B, c)
+  else if NoContextFallback128 and not ExactOpsActive then
+  begin
+    c := TMathContext.Make(34, rmHalfEven);
+    Result := A.Divide(B, c);
+  end
   else
     Result := A.Divide(B);
 end;
