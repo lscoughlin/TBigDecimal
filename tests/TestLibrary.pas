@@ -13,9 +13,12 @@ unit TestLibrary;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry, BigDecimal.Types, BigDecimal,
-  BigDecimal.Elementary, BigDecimal.Trig, BigDecimal.Constants,
-  BigDecimal.Combinatorics, BigDecimal.Gamma, BigDecimal.Financial;
+  Classes, SysUtils, Math, fpcunit, testregistry, BigDecimal.Types,
+  BigDecimal,
+  BigDecimal.Fixed, BigDecimal.Elementary, BigDecimal.Trig,
+  BigDecimal.Constants, BigDecimal.Combinatorics, BigDecimal.Gamma,
+  BigDecimal.Financial, BigDecimal.Limbs, BigDecimal.Multiply,
+  BigDecimal.Divide;
 
 type
   TLibraryTests = class(TTestCase)
@@ -56,8 +59,16 @@ type
     procedure TestSinCosIdentity;
     procedure TestHighPrecisionRoundTrip;
     procedure TestVersion;
+    procedure TestExpTaylorSplit;
+    procedure TestAtanhSplit;
+    procedure TestApproxAbsLargeMagnitude;
+    procedure TestExpBitBurstAgreement;
+    procedure TestExpBitBurstWired;
+    procedure TestLnSplitWired;
     procedure TestSqrtFastPathEqualsGeneral;
     procedure TestStackPathBoundaries;
+    procedure TestBZKernelAgreement;
+    procedure TestBZRoutedDivide;
     procedure TestExpLnRoundTrip;
     procedure TestPowSquare;
     procedure TestTangentNumbers;
@@ -682,6 +693,189 @@ begin
     BigDecimalVersionMinor, BigDecimalVersionRelease]));
 end;
 
+procedure TLibraryTests.TestExpTaylorSplit;
+var
+  T, Q, s1, s2, diff, tol: TBigDecimal;
+  c: TMathContext;
+begin
+  c := TMathContext.Make(60, rmHalfEven);
+  tol := D('1e-55');
+  ExpTaylorSplit(D('1'), D('2'), 50, T, Q);
+  AssertEquals(0, T.Scale);
+  AssertEquals(0, Q.Scale);
+  s1 := T.Divide(Q, c);
+  s2 := Exp(D('0.5'), c);
+  diff := (s1 - s2).Abs;
+  AssertTrue('split vs series at 0.5: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  ExpTaylorSplit(D('-1'), D('2'), 50, T, Q);
+  AssertEquals(0, T.Scale);
+  s1 := T.Divide(Q, c);
+  s2 := Exp(D('-0.5'), c);
+  diff := (s1 - s2).Abs;
+  AssertTrue('split vs series at -0.5: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  c := TMathContext.Make(100, rmHalfEven);
+  ExpTaylorSplit(D('1'), D('1'), 200, T, Q);
+  s1 := T.Divide(Q, c);
+  s2 := Exp(D('1'), c);
+  diff := (s1 - s2).Abs;
+  AssertTrue('split vs series at 1: ' + diff.ToString,
+    diff.CompareTo(D('1e-95')) < 0);
+  try
+    ExpTaylorSplit(D('1'), D('0'), 10, T, Q);
+    Fail('q0 = 0 should raise');
+  except
+    on EBigDecimalDomain do ;
+  end;
+  try
+    ExpTaylorSplit(D('1'), D('2'), 0, T, Q);
+    Fail('N = 0 should raise');
+  except
+    on EBigDecimalDomain do ;
+  end;
+end;
+
+procedure TLibraryTests.TestApproxAbsLargeMagnitude;
+var
+  v: TBigDecimal;
+  a: Double;
+  saved: TFPUExceptionMask;
+begin
+  { A 45-limb magnitude at scale 125 drives (N - 2) * 9 - scale into the
+    256..300 range, where Math.IntPower traps on targets that leave the
+    overflow trap unmasked. The console runner masks it, so the test
+    unmasks first to prove the approximation scales without Power. }
+  saved := GetExceptionMask;
+  SetExceptionMask(saved - [exOverflow, exInvalidOp, exZeroDivide]);
+  try
+    v := TBigDecimal.One.ScaleByPowerOfTen(276).SetScale(125, rmDown);
+    a := ApproxAbs(v);
+    AssertTrue('approx is finite', not IsNan(a) and (Abs(a) < 1e308));
+    AssertTrue('approx has the keynote magnitude: ' + FloatToStr(a),
+      (a > 1e270) and (a < 1e290));
+    v := TBigDecimal.One.ScaleByPowerOfTen(320);
+    AssertTrue('clamp high', ApproxAbs(v) = 1e300);
+    v := TBigDecimal.One.ScaleByPowerOfTen(-320);
+    AssertTrue('clamp low', ApproxAbs(v) = 1e-300);
+  finally
+    SetExceptionMask(saved);
+  end;
+end;
+
+procedure TLibraryTests.TestExpBitBurstAgreement;
+var
+  r, bb: TFx;
+  c: TMathContext;
+  want, diff, tol: TBigDecimal;
+  saved: TFPUExceptionMask;
+begin
+  { The three-chunk input exercised an error-bound call over a 45-limb
+    quotient and trapped before the bound fix. The runner masks the
+    overflow trap, so the test unmasks first. }
+  saved := GetExceptionMask;
+  SetExceptionMask(saved - [exOverflow, exInvalidOp, exZeroDivide]);
+  try
+    r := FxFromDecimal(D('0.4156'), 100);
+    bb := ExpBitBurstCore(r);
+    c := TMathContext.Make(140, rmHalfEven);
+    want := Exp(D('0.4156'), c);
+    diff := (FxRescale(bb, 140).V - want).Abs;
+    tol := TBigDecimal.Create(TBigDecimal.One, 90);
+    AssertTrue('bit-burst agrees: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  finally
+    SetExceptionMask(saved);
+  end;
+end;
+
+procedure TLibraryTests.TestExpBitBurstWired;
+var
+  saved: Integer;
+  c: TMathContext;
+  got, want, diff, tol: TBigDecimal;
+begin
+  { Lower the threshold to route a 300-digit Exp through the wired
+    bit-burst branch, then compare against the Taylor path. }
+  saved := ExpBitBurstDigits;
+  ExpBitBurstDigits := 100;
+  try
+    c := TMathContext.Make(300, rmHalfEven);
+    got := Exp(D('2.7182818284590452353602874713527'), c);
+    ExpBitBurstDigits := MaxInt;
+    want := Exp(D('2.7182818284590452353602874713527'), c);
+    diff := (got - want).Abs;
+    tol := TBigDecimal.Create(TBigDecimal.One, 295);
+    AssertTrue('wired burst agrees: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  finally
+    ExpBitBurstDigits := saved;
+  end;
+end;
+
+procedure TLibraryTests.TestLnSplitWired;
+var
+  saved: Integer;
+  c: TMathContext;
+  got, want, diff, tol: TBigDecimal;
+begin
+  { Lower the threshold to route a 300-digit Ln through the split
+    atanh branch, then compare against the term loop. }
+  saved := LnSplitDigits;
+  LnSplitDigits := 100;
+  try
+    c := TMathContext.Make(300, rmHalfEven);
+    got := Ln(D('2.7182818284590452353602874713527'), c);
+    LnSplitDigits := MaxInt;
+    want := Ln(D('2.7182818284590452353602874713527'), c);
+    diff := (got - want).Abs;
+    tol := TBigDecimal.Create(TBigDecimal.One, 295);
+    AssertTrue('split ln agrees: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  finally
+    LnSplitDigits := saved;
+  end;
+end;
+
+procedure TLibraryTests.TestAtanhSplit;
+var
+  T, Q, s, naive, pw, diff, tol: TBigDecimal;
+  c: TMathContext;
+  k: Integer;
+begin
+  c := TMathContext.Make(60, rmHalfEven);
+  tol := D('1e-55');
+  AtanhSplit(D('1'), D('16'), 60, T, Q);
+  s := T.Divide(Q, c);
+  naive := D('0');
+  pw := D('1');
+  for k := 0 to 200 do
+  begin
+    naive := naive + pw.Divide(D(IntToStr(2 * k + 1)), c);
+    pw := pw.Divide(D('16'), c);
+  end;
+  diff := (s - naive).Abs;
+  AssertTrue('atanh split at 1/16: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  AtanhSplit(D('-1'), D('16'), 60, T, Q);
+  s := T.Divide(Q, c);
+  naive := D('0');
+  pw := D('1');
+  for k := 0 to 200 do
+  begin
+    naive := naive + pw.Divide(D(IntToStr(2 * k + 1)), c);
+    pw := pw.Divide(D('-16'), c);
+  end;
+  diff := (s - naive).Abs;
+  AssertTrue('atanh split at -1/16: ' + diff.ToString, diff.CompareTo(tol) < 0);
+  try
+    AtanhSplit(D('1'), D('0'), 10, T, Q);
+    Fail('q0 = 0 should raise');
+  except
+    on EBigDecimalDomain do ;
+  end;
+  try
+    AtanhSplit(D('1'), D('2'), 0, T, Q);
+    Fail('N = 0 should raise');
+  except
+    on EBigDecimalDomain do ;
+  end;
+end;
+
 procedure TLibraryTests.TestSqrtFastPathEqualsGeneral;
 var
   i, j, nd: Integer;
@@ -755,6 +949,94 @@ begin
       AssertTrue('add rounds once', a.Add(b, c).CompareTo(sum.Round(c)) = 0);
     end;
   end;
+end;
+
+{ Raw-limb agreement between DivRemBZ and DivRemKnuth with the remainder
+  proof on every shape. The two large shapes engage the recursion; the small
+  ones cover the fallback to Algorithm D. }
+procedure TLibraryTests.TestBZKernelAgreement;
+var
+  A, B, Qk, Qb, Rk, Rb, P, S: TLimbs;
+  na, nb, nqk, nrk, nqb, nrb, np, ns, i, t: Integer;
+begin
+  BZFallbacks := 0;
+  RandSeed := 4242;
+  for t := 1 to 4 do
+  begin
+    case t of
+      1: begin na := 100; nb := 40; end;
+      2: begin na := 1056; nb := 523; end;
+      3: begin na := 1024; nb := 512; end;
+      4: begin na := 2048; nb := 1024; end;
+    end;
+    SetLength(A, na + 1);
+    SetLength(B, nb + 1);
+    for i := 0 to na - 1 do
+      A[i] := UInt32(Random(LimbBase));
+    A[na - 1] := 1 + UInt32(Random(LimbBase - 1));
+    for i := 0 to nb - 1 do
+      B[i] := UInt32(Random(LimbBase));
+    B[nb - 1] := LimbBase div 2 + UInt32(Random(LimbBase - LimbBase div 2));
+    SetLength(Qk, na - nb + 3);
+    SetLength(Rk, nb + 1);
+    SetLength(Qb, na - nb + 3);
+    SetLength(Rb, nb + 1);
+    DivRemKnuth(@A[0], na, @B[0], nb, @Qk[0], nqk, @Rk[0], nrk);
+    DivRemBZ(@A[0], na, @B[0], nb, @Qb[0], nqb, @Rb[0], nrb);
+    AssertEquals('quotient length shape ' + IntToStr(t), nqk, nqb);
+    AssertEquals('remainder length shape ' + IntToStr(t), nrk, nrb);
+    for i := 0 to nqk - 1 do
+      AssertEquals('quotient limb ' + IntToStr(i) + ' shape ' + IntToStr(t),
+        Qk[i], Qb[i]);
+    for i := 0 to nrk - 1 do
+      AssertEquals('remainder limb ' + IntToStr(i) + ' shape ' + IntToStr(t),
+        Rk[i], Rb[i]);
+    SetLength(P, nqb + nb + 1);
+    SetLength(S, nqb + nb + 2);
+    if nqb = 0 then
+      np := 0
+    else
+      np := MulMag(@Qb[0], nqb, @B[0], nb, @P[0]);
+    ns := AddMag(@P[0], np, @Rb[0], nrb, @S[0]);
+    AssertEquals('Q * B + R = A shape ' + IntToStr(t), 0,
+      CmpMag(@S[0], ns, @A[0], na));
+    AssertEquals('R < B shape ' + IntToStr(t), -1,
+      CmpMag(@Rb[0], nrb, @B[0], nb));
+  end;
+  AssertEquals('no BZ fallback', 0, BZFallbacks);
+end;
+
+{ End-to-end agreement between the routed Burnikel-Ziegler path and Algorithm
+  D on a divide whose divisor passes the gate. }
+procedure TLibraryTests.TestBZRoutedDivide;
+var
+  SX, SY: string;
+  X, Y, Q1, Q2: TBigDecimal;
+  Ctx: TMathContext;
+  i, Save: Integer;
+  GDefaultGuard: TSuspendDefault;
+begin
+  GDefaultGuard.Suspend;
+  SX := '1';
+  for i := 2 to 11000 do
+    SX += Chr(Ord('0') + ((i * 7 + 11) mod 10));
+  SY := '1';
+  for i := 2 to 4700 do
+    SY += Chr(Ord('0') + ((i * 7 + 29) mod 10));
+  X := D(SX);
+  Y := D(SY);
+  Ctx := TMathContext.Make(6400, rmHalfEven);
+  Save := BZDivThreshold;
+  BZFallbacks := 0;
+  try
+    Q1 := X.Divide(Y, Ctx);
+    BZDivThreshold := MaxInt;
+    Q2 := X.Divide(Y, Ctx);
+  finally
+    BZDivThreshold := Save;
+  end;
+  AssertEquals('BZ and Knuth agree', Q2.ToString, Q1.ToString);
+  AssertEquals('no BZ fallback', 0, BZFallbacks);
 end;
 
 procedure TLibraryTests.TestPowSquare;

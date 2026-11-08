@@ -66,9 +66,74 @@ implementation
 uses
   BigDecimal.Multiply, BigDecimal.Rounding;
 
-{ Truncating product of two values at scale W, in stack buffers. Returns False
-  when the operands are too long or the product scale is below W. R holds no
-  array yet. The routine has no managed local. }
+{ Truncating product of two values at scale W, in heap buffers. Same
+  contract as the stack path, without a length limit except MaxExactDigits.
+  R holds no array yet. }
+function HeapMulTrunc(const va, vb: TMagView; sp: Int64; W: Integer;
+  var R: TBigDecimal): Boolean;
+var
+  prod, tr: TLimbs;
+  n, nr: Integer;
+  drop: Int64;
+  inexact: Boolean;
+begin
+  Result := False;
+  if Int64(va.N) + vb.N > MaxExactDigits div 9 + 2 then Exit;
+  SetLength(prod, va.N + vb.N);
+  n := MulMag(va.P, va.N, vb.P, vb.N, @prod[0]);
+  drop := sp - W;
+  if drop = 0 then
+    PutFromPtr(R, va.Neg <> vb.Neg, @prod[0], n, W)
+  else
+  begin
+    if MagDigits(@prod[0], n) <= drop then
+    begin
+      PutFromPtr(R, False, nil, 0, W);
+      Result := True;
+      Exit;
+    end;
+    SetLength(tr, n + 1);
+    RoundMagDrop(@prod[0], n, drop, rmDown, va.Neg <> vb.Neg, False, @tr[0], nr, inexact);
+    PutFromPtr(R, va.Neg <> vb.Neg, @tr[0], nr, W);
+  end;
+  Result := True;
+end;
+
+{ Truncating square of a value at scale W, in heap buffers. Same contract
+  as HeapMulTrunc. }
+function HeapSqrTrunc(const va: TMagView; sp: Int64; W: Integer;
+  var R: TBigDecimal): Boolean;
+var
+  prod, tr: TLimbs;
+  n, nr: Integer;
+  drop: Int64;
+  inexact: Boolean;
+begin
+  Result := False;
+  if Int64(va.N) * 2 > MaxExactDigits div 9 + 2 then Exit;
+  SetLength(prod, 2 * va.N);
+  n := SqrMag(va.P, va.N, @prod[0]);
+  drop := sp - W;
+  if drop = 0 then
+    PutFromPtr(R, False, @prod[0], n, W)
+  else
+  begin
+    if MagDigits(@prod[0], n) <= drop then
+    begin
+      PutFromPtr(R, False, nil, 0, W);
+      Result := True;
+      Exit;
+    end;
+    SetLength(tr, n + 1);
+    RoundMagDrop(@prod[0], n, drop, rmDown, False, False, @tr[0], nr, inexact);
+    PutFromPtr(R, False, @tr[0], nr, W);
+  end;
+  Result := True;
+end;
+
+{ Truncating product of two values at scale W. Uses stack buffers for short
+  operands and heap buffers beyond MaxStackLimbs. Returns False when an
+  operand is zero or the product scale is below W. R holds no array yet. }
 function TryMulTrunc(const A, B: TBigDecimal; W: Integer; var R: TBigDecimal): Boolean;
 var
   va, vb: TMagView;
@@ -80,9 +145,10 @@ begin
   Result := False;
   GetMagView(A, va);
   GetMagView(B, vb);
-  if (va.N = 0) or (vb.N = 0) or (va.N + vb.N > MaxStackLimbs) then Exit;
+  if (va.N = 0) or (vb.N = 0) then Exit;
   sp := Int64(A.Scale) + B.Scale;
   if sp < W then Exit;
+  if va.N + vb.N > MaxStackLimbs then Exit(HeapMulTrunc(va, vb, sp, W, R));
   n := MulMag(va.P, va.N, vb.P, vb.N, @prod[0]);
   drop := sp - W;
   if drop = 0 then
@@ -97,6 +163,39 @@ begin
     end;
     RoundMagDrop(@prod[0], n, drop, rmDown, va.Neg <> vb.Neg, False, @tr[0], nr, inexact);
     PutFromPtr(R, va.Neg <> vb.Neg, @tr[0], nr, W);
+  end;
+  Result := True;
+end;
+
+{ Truncating square of a value at scale W. Same contract as TryMulTrunc. }
+function TrySqrTrunc(const A: TBigDecimal; W: Integer; var R: TBigDecimal): Boolean;
+var
+  va: TMagView;
+  prod, tr: array[0..MaxStackLimbs] of TLimb;
+  n, nr: Integer;
+  sp, drop: Int64;
+  inexact: Boolean;
+begin
+  Result := False;
+  GetMagView(A, va);
+  if va.N = 0 then Exit;
+  sp := Int64(A.Scale) * 2;
+  if sp < W then Exit;
+  if 2 * va.N > MaxStackLimbs then Exit(HeapSqrTrunc(va, sp, W, R));
+  n := SqrMag(va.P, va.N, @prod[0]);
+  drop := sp - W;
+  if drop = 0 then
+    PutFromPtr(R, False, @prod[0], n, W)
+  else
+  begin
+    if MagDigits(@prod[0], n) <= drop then
+    begin
+      PutFromPtr(R, False, nil, 0, W);
+      Result := True;
+      Exit;
+    end;
+    RoundMagDrop(@prod[0], n, drop, rmDown, False, False, @tr[0], nr, inexact);
+    PutFromPtr(R, False, @tr[0], nr, W);
   end;
   Result := True;
 end;
@@ -120,11 +219,33 @@ begin
   Result := True;
 end;
 
+{ Multiplies E by 10^K for K >= 0 without Math.Power. Math.Power routes
+  integral exponents through IntPower, which traps with an overflow fault
+  on targets that leave that trap unmasked; the plain multiplies below
+  return the 1e300 sentinel instead of overflowing. }
+function ScaleUp10(E: Double; K: Integer): Double;
+begin
+  Result := E;
+  while K >= 9 do
+  begin
+    if Result > 9e298 then Exit(1e300);
+    Result := Result * 1e9;
+    Dec(K, 9);
+  end;
+  while K > 0 do
+  begin
+    if Result > 9e306 then Exit(1e300);
+    Result := Result * 10.0;
+    Dec(K);
+  end;
+end;
+
 function ApproxAbs(const X: TBigDecimal): Double;
 var
   v: TMagView;
   m: Double;
   e10: Double;
+  k: Integer;
 begin
   GetMagView(X, v);
   if v.N = 0 then Exit(0.0);
@@ -136,7 +257,24 @@ begin
   e10 -= X.Scale;
   if e10 > 300 then Exit(1e300);
   if e10 < -300 then Exit(1e-300);
-  Result := m * Power(10.0, e10);
+  { e10 holds an integral value. }
+  k := Trunc(e10);
+  if k >= 0 then
+    Result := ScaleUp10(m, k)
+  else
+  begin
+    Result := m;
+    while k <= -9 do
+    begin
+      Result := Result / 1e9;
+      Inc(k, 9);
+    end;
+    while k < 0 do
+    begin
+      Result := Result / 10.0;
+      Inc(k);
+    end;
+  end;
 end;
 
 function FxFromDecimal(const X: TBigDecimal; W: Integer): TFx;
@@ -207,7 +345,7 @@ var
 begin
   ma := ApproxAbs(A.V);
   Result.W := A.W;
-  if not TryMulTrunc(A.V, A.V, A.W, Result.V) then
+  if not TrySqrTrunc(A.V, A.W, Result.V) then
     Result.V := A.V.Square.SetScale(A.W, rmDown);
   Result.E := (2 * ma * A.E + 1.0) * 1.0000001;
 end;
@@ -253,12 +391,12 @@ begin
   if W2 >= A.W then
   begin
     if W2 - A.W > 280 then Result.E := 1e300
-    else Result.E := A.E * Power(10.0, W2 - A.W);
+    else Result.E := ScaleUp10(A.E, W2 - A.W);
   end
   else if A.W - W2 > 280 then
     Result.E := 1.0
   else
-    Result.E := A.E / Power(10.0, A.W - W2) + 1.0;
+    Result.E := A.E / ScaleUp10(1.0, A.W - W2) + 1.0;
 end;
 
 function FxShift10(const A: TFx; K: Int64): TFx;

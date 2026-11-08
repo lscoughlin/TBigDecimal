@@ -2,11 +2,12 @@
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
-keywords: divide, knuth algorithm d, newton reciprocal
+keywords: divide, knuth algorithm d, newton reciprocal, burnikel-ziegler
 documentation: doc/design.md
 notes:
   - Knuth Algorithm D in base 10^9
   - a Newton reciprocal path serves divisors above a size threshold
+  - a Burnikel-Ziegler recursion serves mid-size divisors
 ---
 }
 unit BigDecimal.Divide;
@@ -26,6 +27,10 @@ var
   NewtonFallbacks: Integer = 0;
   { Divisor size in limbs above which the Newton reciprocal path runs. }
   NewtonDivThreshold: Integer = 4096;  // doc/RESULTS.md: Knuth wins up to 2048 limbs, tie at 4096
+  { Count of Burnikel-Ziegler divisions that fell back to Algorithm D (tests). }
+  BZFallbacks: Integer = 0;
+  { Divisor size in limbs at which the Burnikel-Ziegler recursion runs. }
+  BZDivThreshold: Integer = 512;  // doc/RESULTS.md: wins at 512 divisor limbs, loses at 334
 
 { q := a div b, rem := a mod b. a and b are normalized, b is not empty.
   q needs na - nb + 1 limbs (at least 1), rem needs nb limbs.
@@ -48,6 +53,12 @@ function ISqrtMag(n: PLimb; nn: Integer; y: PLimb; out Exact: Boolean): Integer;
 
 { Newton reciprocal division only, for tests and benchmarks. }
 procedure DivRemNewton(a: PLimb; na: Integer; b: PLimb; nb: Integer;
+  q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
+
+{ Burnikel-Ziegler recursion. DivRemMag routes here when nb >= BZDivThreshold
+  and na - nb >= nb - 256. Falls back to Algorithm D on any failed internal
+  check and counts the fallback. }
+procedure DivRemBZ(a: PLimb; na: Integer; b: PLimb; nb: Integer;
   q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
 
 implementation
@@ -546,11 +557,477 @@ begin
   nr := nrp;
 end;
 
+{ Grows a buffer without shrinking it and keeps the content. }
+procedure BZNeed(var b: TLimbs; n: Integer);
+begin
+  if Length(b) < Max(n, 1) then
+    SetLength(b, Max(n, 1));
+end;
+
+{ Fresh zeroed buffer of n limbs (capacity at least 1). }
+procedure BZZero(var b: TLimbs; n: Integer);
+begin
+  SetLength(b, Max(n, 1));
+  if n > 0 then
+    FillChar(b[0], n * SizeOf(TLimb), 0);
+end;
+
+{ q -= 1 for a normalized multi-limb value. Returns False on underflow. }
+function BZDec1(q: PLimb; var nq: Integer): Boolean;
+var
+  i: Integer;
+begin
+  i := 0;
+  while (i < nq) and (q[i] = 0) do
+  begin
+    q[i] := LimbBase - 1;
+    Inc(i);
+  end;
+  if i >= nq then Exit(False);
+  Dec(q[i]);
+  nq := NormLen(q, nq);
+  Result := True;
+end;
+
+{ acc += part * B^shift. acc has capacity cap (limbs), nacc is its live
+  length. part has npart live limbs. Fails (Ok = False) when acc overflows. }
+procedure BZAddShifted(acc: PLimb; var nacc: Integer; cap: Integer;
+  part: PLimb; npart: Integer; shift: Integer; var tmp: TLimbs;
+  var Ok: Boolean);
+var
+  i, nt: Integer;
+begin
+  if npart = 0 then Exit;
+  BZNeed(tmp, shift + npart + 1);
+  for i := 0 to shift + npart do
+    tmp[i] := 0;
+  for i := 0 to npart - 1 do
+    tmp[shift + i] := part[i];
+  nt := NormLen(@tmp[0], shift + npart);
+  if nt = 0 then Exit;
+  if shift + nt + 1 > cap then
+  begin
+    Ok := False;
+    Exit;
+  end;
+  nacc := AddMag(acc, nacc, @tmp[0], nt, acc);
+end;
+
+{ Recursive 2n-by-n kernel. D has nd normalized limbs (top limb at least
+  Base/2), X has value below B^(2*nd). Q needs nx + 2 limbs, R needs nd + 1
+  limbs. Sets Ok = False on any failed internal check; the caller then falls
+  back to Algorithm D. }
+procedure BZDivHalf(X: PLimb; nx: Integer; D: PLimb; nd: Integer;
+  Q: PLimb; out nq: Integer; R: PLimb; out nr: Integer; var Ok: Boolean);
+var
+  n1, n0, sPre, nxp, s1, i, nqp, nrp, nq1, nr1, nt, np, ns, nu1, ndcur: Integer;
+  nq0, nr0, nt2, ns2, nw, nq2, nr2, L, Lcur, off: Integer;
+  Xh, qp1, rp, Xp, U, Q1, R1, T, P, S, U1, Dcur, V, Q0, R0: TLimbs;
+  T2, P2, S2, U2, W, q2, r2, sum: TLimbs;
+  tmp: TLimbs;
+  qh: PLimb;
+  nd2, c: Integer;
+begin
+  nx := NormLen(X, nx);
+  nd := NormLen(D, nd);
+  if (nd <= BZDivThreshold) or (nx <= nd) or (nd < 2) then
+  begin
+    DivRemKnuth(X, nx, D, nd, Q, nq, R, nr);
+    Exit;
+  end;
+  { Single-limb pre-step on the top nd limbs: Rp < D afterwards. }
+  sPre := nx - nd;
+  BZZero(Xh, nd);
+  for i := 0 to nd - 1 do
+    Xh[i] := X[sPre + i];
+  BZZero(qp1, 2);
+  BZZero(rp, nd + 1);
+  DivRemKnuth(@Xh[0], nd, D, nd, @qp1[0], nqp, @rp[0], nrp);
+  BZZero(Xp, 2 * nd + 1);
+  for i := 0 to sPre - 1 do
+    Xp[i] := X[i];
+  for i := 0 to nrp - 1 do
+    Xp[sPre + i] := rp[i];
+  nxp := NormLen(@Xp[0], sPre + nrp);
+  for i := 0 to nx + 1 do
+    Q[i] := 0;
+  nq := 0;
+  if nqp > 0 then
+    BZAddShifted(Q, nq, nx + 2, @qp1[0], nqp, sPre, tmp, Ok);
+  if not Ok then Exit;
+  if nxp <= nd then
+  begin
+    { Xp is tiny: finish directly. }
+    if CmpMag(@Xp[0], nxp, D, nd) < 0 then
+    begin
+      for i := 0 to nxp - 1 do
+        R[i] := Xp[i];
+      nr := nxp;
+      Exit;
+    end;
+    BZZero(Q1, 4);
+    BZZero(R1, nd + 1);
+    DivRemKnuth(@Xp[0], nxp, D, nd, @Q1[0], nq1, @R1[0], nr1);
+    BZAddShifted(Q, nq, nx + 2, @Q1[0], nq1, 0, tmp, Ok);
+    if not Ok then Exit;
+    for i := 0 to nr1 - 1 do
+      R[i] := R1[i];
+    nr := nr1;
+    Exit;
+  end;
+  n1 := Min((nd + 1) div 2, nxp - nd);
+  n0 := nd - n1;
+  { Sub-step 1: top 2*n1 limbs against the high half D1. }
+  BZZero(U, 2 * n1);
+  for i := 0 to 2 * n1 - 1 do
+    U[i] := Xp[nxp - 2 * n1 + i];
+  BZZero(Q1, 2 * n1 + 2);
+  BZZero(R1, n1 + 1);
+  BZDivHalf(@U[0], 2 * n1, D + n0, n1, @Q1[0], nq1, @R1[0], nr1, Ok);
+  if not Ok then Exit;
+  { T = R1 * B^s1 + low s1 limbs of Xp; S = Q1 * D0 * B^(s1-n0). }
+  s1 := nxp - 2 * n1;
+  BZZero(T, 2 * nd + 4);
+  for i := 0 to s1 - 1 do
+    T[i] := Xp[i];
+  for i := 0 to nr1 - 1 do
+    T[s1 + i] := R1[i];
+  nt := NormLen(@T[0], s1 + nr1);
+  BZZero(P, nd + 2);
+  if nq1 = 0 then
+    np := 0
+  else
+    np := MulMag(@Q1[0], nq1, D, n0, @P[0]);
+  BZZero(S, 2 * nd + 4);
+  for i := 0 to np - 1 do
+    S[s1 - n0 + i] := P[i];
+  ns := NormLen(@S[0], s1 - n0 + np);
+  BZZero(U1, 2 * nd + 2);
+  for i := 0 to nd - 1 do
+    U1[s1 - n0 + i] := D[i];
+  nu1 := NormLen(@U1[0], nd + s1 - n0);
+  c := 0;
+  while CmpMag(@T[0], nt, @S[0], ns) < 0 do
+  begin
+    nt := AddMag(@T[0], nt, @U1[0], nu1, @T[0]);
+    if not BZDec1(@Q1[0], nq1) then
+    begin
+      Ok := False;
+      Exit;
+    end;
+    Inc(c);
+    if c > 20 then
+    begin
+      Ok := False;
+      Exit;
+    end;
+  end;
+  BZZero(Dcur, 2 * nd + 4);
+  ndcur := SubMag(@T[0], nt, @S[0], ns, @Dcur[0]);
+  { Sub-step 2: top 2*n1 limbs of Dcur against D1. }
+  Lcur := ndcur;
+  if Lcur <= 2 * n1 then
+    L := 0
+  else
+    L := Lcur - 2 * n1;
+  BZZero(V, 2 * n1);
+  for i := 0 to 2 * n1 - 1 do
+    if i + L < Lcur then
+      V[i] := Dcur[i + L];
+  BZZero(Q0, 2 * n1 + 2);
+  BZZero(R0, n1 + 1);
+  BZDivHalf(@V[0], 2 * n1, D + n0, n1, @Q0[0], nq0, @R0[0], nr0, Ok);
+  if not Ok then Exit;
+  if L >= n0 then
+  begin
+    BZZero(T2, 2 * nd + 4);
+    for i := 0 to L - 1 do
+      T2[i] := Dcur[i];
+    for i := 0 to nr0 - 1 do
+      T2[L + i] := R0[i];
+    nt2 := NormLen(@T2[0], L + nr0);
+    BZZero(P2, nd + 2);
+    if nq0 = 0 then
+      np := 0
+    else
+      np := MulMag(@Q0[0], nq0, D, n0, @P2[0]);
+    BZZero(S2, 2 * nd + 4);
+    for i := 0 to np - 1 do
+      S2[L - n0 + i] := P2[i];
+    ns2 := NormLen(@S2[0], L - n0 + np);
+    BZZero(U2, 2 * nd + 2);
+    for i := 0 to nd - 1 do
+      U2[L - n0 + i] := D[i];
+    off := NormLen(@U2[0], nd + L - n0);
+    c := 0;
+    while CmpMag(@T2[0], nt2, @S2[0], ns2) < 0 do
+    begin
+      nt2 := AddMag(@T2[0], nt2, @U2[0], off, @T2[0]);
+      if not BZDec1(@Q0[0], nq0) then
+      begin
+        Ok := False;
+        Exit;
+      end;
+      Inc(c);
+      if c > 20 then
+      begin
+        Ok := False;
+        Exit;
+      end;
+    end;
+    nr := SubMag(@T2[0], nt2, @S2[0], ns2, R);
+    BZAddShifted(Q, nq, nx + 2, @Q1[0], nq1, s1 - n0, tmp, Ok);
+    if not Ok then Exit;
+    BZAddShifted(Q, nq, nx + 2, @Q0[0], nq0, L - n0, tmp, Ok);
+    if not Ok then Exit;
+    if L > n0 then
+    begin
+      { R_sub can reach D * B^(L - n0): reduce it exactly. }
+      BZZero(q2, 4);
+      BZZero(r2, nd + 2);
+      DivRemKnuth(R, nr, D, nd, @q2[0], nq2, @r2[0], nr2);
+      for i := 0 to nr2 - 1 do
+        R[i] := r2[i];
+      nr := nr2;
+      BZAddShifted(Q, nq, nx + 2, @q2[0], nq2, 0, tmp, Ok);
+      if not Ok then Exit;
+    end;
+  end
+  else
+  begin
+    { L < n0: split Q0 * B^L at B^n0 into qh * B^n0 + ql, so
+      W = Q0 * D1 * B^L = qh * D + E with signed E = ql * D1 - qh * D0.
+      |E| stays below 3 * B^nd, so one tiny schoolbook division fixes it. }
+    BZZero(T2, 2 * nd + 4);
+    for i := 0 to L - 1 do
+      T2[i] := Dcur[i];
+    for i := 0 to nr0 - 1 do
+      T2[L + i] := R0[i];
+    nt2 := NormLen(@T2[0], L + nr0);
+    BZZero(sum, nd + 2);
+    for i := 0 to L - 1 do
+      sum[i] := 0;
+    for i := 0 to nq0 - 1 do
+      sum[L + i] := Q0[i];
+    nd2 := NormLen(@sum[0], L + nq0);
+    { ql = low n0 limbs of sum in place; qh = limbs above n0. }
+    qh := @sum[Min(nd2, n0)];
+    BZZero(P2, nd + 2);
+    BZZero(W, 2 * nd + 4);
+    if Min(nd2, n0) = 0 then
+      np := 0
+    else
+      np := MulMag(@sum[0], Min(nd2, n0), D + n0, n1, @P2[0]);
+    if nd2 <= n0 then
+      off := 0
+    else
+      off := MulMag(qh, nd2 - n0, D, n0, @W[0]);
+    BZZero(S2, 2 * nd + 4);
+    if CmpMag(@P2[0], np, @W[0], off) >= 0 then
+    begin
+      np := SubMag(@P2[0], np, @W[0], off, @S2[0]);
+      nw := 0;
+    end
+    else
+    begin
+      np := SubMag(@W[0], off, @P2[0], np, @S2[0]);
+      nw := 1;
+    end;
+    { Signed E (length np) is in S2; qh (length nd2 - n0 or 0) is in sum. }
+    BZZero(q2, n1 + 3);
+    BZZero(r2, nd + 2);
+    if np = 0 then
+    begin
+      nq2 := 0;
+      nr2 := 0;
+    end
+    else
+      DivRemKnuth(@S2[0], np, D, nd, @q2[0], nq2, @r2[0], nr2);
+    if nw = 0 then
+    begin
+      { q2 = qh + qe; r2 = re. }
+      if nd2 > n0 then
+        nq2 := AddMag(qh, nd2 - n0, @q2[0], nq2, @q2[0]);
+    end
+    else
+    begin
+      { q2 = qh - qe - (re > 0); r2 = (D - re) mod D. }
+      if nd2 <= n0 then
+      begin
+        { qh = 0 with E < 0 is impossible: ql * D1 >= 0 forces qh >= 1. }
+        Ok := False;
+        Exit;
+      end;
+      nq2 := SubMag(qh, nd2 - n0, @q2[0], nq2, @q2[0]);
+      if nr2 > 0 then
+      begin
+        if not BZDec1(@q2[0], nq2) then
+        begin
+          Ok := False;
+          Exit;
+        end;
+        nr2 := SubMag(D, nd, @r2[0], nr2, @r2[0]);
+      end;
+    end;
+    { R = r2 + T2base, normalized by a bounded loop. }
+    nr := AddMag(@r2[0], nr2, @T2[0], nt2, R);
+    c := 0;
+    while CmpMag(R, nr, D, nd) >= 0 do
+    begin
+      nr := SubMag(R, nr, D, nd, R);
+      i := 0;
+      while (i < nq2) and (q2[i] = LimbBase - 1) do
+      begin
+        q2[i] := 0;
+        Inc(i);
+      end;
+      if i > n1 + 2 then
+      begin
+        Ok := False;
+        Exit;
+      end;
+      if i >= nq2 then
+      begin
+        q2[i] := 1;
+        nq2 := i + 1;
+      end
+      else
+        Inc(q2[i]);
+      Inc(c);
+      if c > 10 then
+      begin
+        Ok := False;
+        Exit;
+      end;
+    end;
+    BZAddShifted(Q, nq, nx + 2, @Q1[0], nq1, s1 - n0, tmp, Ok);
+    if not Ok then Exit;
+    BZAddShifted(Q, nq, nx + 2, @q2[0], nq2, 0, tmp, Ok);
+    if not Ok then Exit;
+  end;
+  nq := NormLen(Q, nx + 2);
+end;
+
+procedure DivRemBZ(a: PLimb; na: Integer; b: PLimb; nb: Integer;
+  q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
+var
+  f: UInt32;
+  An, Bn, D, qacc, DIVB, Qb, Rcur, Z: TLimbs;
+  nan, nbn, remaining, chunk, divlen, nqb, nrc, ndiv, off, i, j: Integer;
+  Ok: Boolean;
+begin
+  nan := NormLen(a, na);
+  nbn := NormLen(b, nb);
+  if (nbn = 0) or (nbn < BZDivThreshold) or (nan - nbn < nbn - 256) then
+  begin
+    DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
+    Exit;
+  end;
+  f := UInt32(LimbBase div (UInt64(b[nbn - 1]) + 1));
+  if f = 1 then
+  begin
+    BZZero(An, nan + 1);
+    for i := 0 to nan - 1 do
+      An[i] := a[i];
+    BZZero(Bn, nbn + 1);
+    for i := 0 to nbn - 1 do
+      Bn[i] := b[i];
+  end
+  else
+  begin
+    BZZero(An, na + 2);
+    nan := MulSmall(a, na, f, @An[0]);
+    BZZero(Bn, nb + 2);
+    nbn := MulSmall(b, nb, f, @Bn[0]);
+  end;
+  BZZero(D, nbn);
+  for i := 0 to nbn - 1 do
+    D[i] := Bn[i];
+  BZZero(qacc, na - nb + 4);
+  for i := 0 to na - nb + 3 do
+    qacc[i] := 0;
+  BZZero(Rcur, nbn + 1);
+  nrc := 0;
+  BZZero(Z, na - nb + nbn + 6);
+  Ok := True;
+  remaining := nan;
+  while remaining > 0 do
+  begin
+    chunk := remaining mod nbn;
+    if (chunk = 0) or (chunk > remaining) then
+      chunk := Min(nbn, remaining);
+    divlen := nrc + chunk;
+    BZZero(DIVB, 2 * nbn + 1);
+    for i := 0 to chunk - 1 do
+      DIVB[i] := An[remaining - chunk + i];
+    for j := 0 to nrc - 1 do
+      DIVB[chunk + j] := Rcur[j];
+    ndiv := NormLen(@DIVB[0], divlen);
+    BZZero(Qb, 2 * nbn + 2);
+    BZDivHalf(@DIVB[0], ndiv, @D[0], nbn, @Qb[0], nqb, @Rcur[0], nrc, Ok);
+    if not Ok then Break;
+    off := remaining - chunk;
+    { qacc += Qb * B^off }
+    BZNeed(Z, off + nqb + 1);
+    for i := 0 to off + nqb do
+      Z[i] := 0;
+    for i := 0 to nqb - 1 do
+      Z[off + i] := Qb[i];
+    nqb := NormLen(@Z[0], off + nqb);
+    nq := NormLen(@qacc[0], na - nb + 4);
+    nq := AddMag(@qacc[0], nq, @Z[0], nqb, @qacc[0]);
+    remaining := remaining - chunk;
+  end;
+  if not Ok then
+  begin
+    Inc(BZFallbacks);
+    DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
+    Exit;
+  end;
+  nq := NormLen(@qacc[0], na - nb + 4);
+  if nq > na - nb + 1 then
+  begin
+    Inc(BZFallbacks);
+    DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
+    Exit;
+  end;
+  for i := 0 to nq - 1 do
+    q[i] := qacc[i];
+  if f = 1 then
+  begin
+    if nrc > nb then
+    begin
+      Inc(BZFallbacks);
+      DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
+      Exit;
+    end;
+    for i := 0 to nrc - 1 do
+      rem[i] := Rcur[i];
+    nr := nrc;
+  end
+  else
+  begin
+    BZZero(Z, nbn + 1);
+    DivSmall(@Rcur[0], nrc, f, @Z[0]);
+    nr := NormLen(@Z[0], nrc);
+    if nr > nb then
+    begin
+      Inc(BZFallbacks);
+      DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
+      Exit;
+    end;
+    for i := 0 to nr - 1 do
+      rem[i] := Z[i];
+  end;
+end;
+
 procedure DivRemMag(a: PLimb; na: Integer; b: PLimb; nb: Integer;
   q: PLimb; out nq: Integer; rem: PLimb; out nr: Integer);
 begin
   if (nb >= NewtonDivThreshold) and (na - nb >= NewtonDivThreshold) then
     DivRemNewton(a, na, b, nb, q, nq, rem, nr)
+  else if (nb >= BZDivThreshold) and (na - nb >= nb - 256) then
+    DivRemBZ(a, na, b, nb, q, nq, rem, nr)
   else
     DivRemKnuth(a, na, b, nb, q, nq, rem, nr);
 end;

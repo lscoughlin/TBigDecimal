@@ -131,8 +131,11 @@ type
   end;
 
 const
-  { Magnitudes up to this many limbs use stack buffers in the arithmetic. }
-  MaxStackLimbs = 48;
+  { Magnitudes up to this many limbs use stack buffers in the arithmetic.
+    Bench 2026-11-07: 96 covers the 300-digit context divide (69 limbs after
+    scaling) in the stack fast path; the 1000-digit shape (225 limbs) stays on
+    the heap path. }
+  MaxStackLimbs = 96;
 
 procedure GetMagView(const X: TBigDecimal; var V: TMagView);
 { Stores a value built from the magnitude at P (not consumed) in R, which holds

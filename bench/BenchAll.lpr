@@ -279,6 +279,15 @@ begin
     PrintFunc('gamma', n, reps, @DoGamma);
     PrintFunc('lngamma', n, reps, @DoLnGamma);
   end;
+  lst := [3000, 10000];
+  for ii := 0 to High(lst) do
+  begin
+    n := lst[ii];
+    c := TMathContext.Make(n, rmHalfEven);
+    GC := c;
+    PrintFunc('exp', n, 0, @DoExp);
+    PrintFunc('ln', n, 0, @DoLn);
+  end;
   WriteLn;
   WriteLn('Small-value path, nanoseconds per operation');
   GFX := TBigDecimal.Create('123456.78');

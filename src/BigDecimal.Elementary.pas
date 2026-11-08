@@ -45,6 +45,18 @@ var
   { False makes Sqrt use the general path only (for tests). }
   SqrtFastPath: Boolean = True;
 
+  { Working precision at which ExpFxCore evaluates the reduced argument
+    with the bit-burst core instead of the halved Taylor series. }
+  ExpBitBurstDigits: Integer = 8000;  // doc/RESULTS.md: burst wins at 8000 digits (1.09x), loses at 6000 (0.86x)
+
+  { Working precision at which LnFxCore evaluates the atanh series with
+    binary splitting instead of the term loop. }
+  LnSplitDigits: Integer = 1000;  // doc/RESULTS.md: split wins at 1000 digits (2.0x), ties at 300
+
+  { Split top-size multiple: LnFxCore splits only when the operand limbs
+    times the term count stay within this multiple of the working limbs. }
+  LnSplitTopMul: Integer = 50;  // doc/RESULTS.md: wins at ratio 44, loses at 60
+
 { Floor of the K-th root of a non-negative integer (scale 0). }
 function IRootFloor(const N: TBigDecimal; K: Integer): TBigDecimal;
 
@@ -52,6 +64,28 @@ function IRootFloor(const N: TBigDecimal; K: Integer): TBigDecimal;
   ExpFx returns exp(X) / 10^K. }
 function LnFx(const X: TBigDecimal; W: Integer): TFx;
 function ExpFx(const X: TFx; out K: Int64): TFx;
+
+{ Bit-burst exponential of a reduced argument. R must satisfy
+  |R| <= 1.2 at scale W > 0. Returns exp(R) at scale W with a tracked error
+  bound. ExpFxCore uses it when the working precision reaches
+  ExpBitBurstDigits. }
+function ExpBitBurstCore(const R: TFx): TFx;
+
+{ Binary splitting core for the Taylor series of exp at a rational point.
+  Computes S = sum_{k=0}^{N-1} (p0/q0)^k / k! as exact integers T and Q
+  with S = T / Q. p0 and q0 are exact integers (scale 0); p0 may be
+  negative and q0 must be positive. N must be positive. Exact in every
+  context: the routine suspends the default. }
+procedure ExpTaylorSplit(const p0, q0: TBigDecimal; N: Integer;
+  out T, Q: TBigDecimal);
+
+{ Binary splitting core for sum_{k=0}^{N-1} (p0/q0)^k / (2k+1).
+  Computes S as exact integers T and Q with S = T / Q. p0 and q0 are
+  exact integers (scale 0); p0 may be negative and q0 must be positive.
+  N must be positive. Exact in every context: the routine suspends
+  the default. }
+procedure AtanhSplit(const p0, q0: TBigDecimal; N: Integer;
+  out T, Q: TBigDecimal);
 
 { Returns the default context of the calling thread. Raises
   EBigDecimalNoContext when there is none. }
@@ -314,6 +348,195 @@ end;
 
 { ----- exp ----- }
 
+type
+  TBSNode = record
+    T, P, R, Y: TBigDecimal;
+  end;
+
+{ Recursive worker for ExpTaylorSplit. T(a,b) / P(a,b) / R(a,b) holds the
+  partial sum over [a, b) scaled by a!; Y(a,b) holds p0^(b-a). All values
+  are exact integers. }
+procedure ExpTaylorRange(const p0, q0: TBigDecimal; a, b: Integer;
+  out N: TBSNode);
+var
+  m: Integer;
+  L, Rr: TBSNode;
+begin
+  if b - a = 1 then
+  begin
+    { Single term k = a contributes P(a,a+1) * q0. }
+    N.P := TBigDecimal.Create(Int64(a) + 1);
+    N.R := q0;
+    N.T := N.P * N.R;
+    N.Y := p0;
+  end
+  else
+  begin
+    m := a + (b - a) div 2;
+    ExpTaylorRange(p0, q0, a, m, L);
+    ExpTaylorRange(p0, q0, m, b, Rr);
+    N.P := L.P * Rr.P;
+    N.R := L.R * Rr.R;
+    N.Y := L.Y * Rr.Y;
+    N.T := L.T * Rr.P * Rr.R + L.Y * Rr.T;
+  end;
+end;
+
+procedure ExpTaylorSplit(const p0, q0: TBigDecimal; N: Integer;
+  out T, Q: TBigDecimal);
+var
+  S: TBSNode;
+  GDefaultGuard: TSuspendDefault;
+begin
+  if (q0.Sign <= 0) or (N <= 0) then
+    raise EBigDecimalDomain.Create('binary split needs q0 > 0 and N > 0');
+  GDefaultGuard.Suspend;
+  ExpTaylorRange(p0, q0, 0, N, S);
+  T := S.T;
+  Q := S.P * S.R;
+end;
+
+type
+  TAtanhNode = record
+    T, P, Q, D: TBigDecimal;
+  end;
+
+{ Recursive worker for AtanhSplit. T(a,b) / Q(a,b) holds the partial sum of
+  (p0/q0)^k / (2k+1) over [a, b). P(a,b) holds p0^(b-a), Q(a,b) holds
+  q0^(b-a) times the odd denominators, and D(a,b) holds the odd
+  denominators (2a+1)(2a+3)...(2b-1). All values are exact. }
+procedure AtanhRange(const p0, q0: TBigDecimal; a, b: Integer;
+  out Nd: TAtanhNode);
+var
+  m: Integer;
+  L, Rr: TAtanhNode;
+begin
+  if b - a = 1 then
+  begin
+    { Single term k = a contributes q0 / (q0 * (2a+1)). }
+    Nd.P := p0;
+    Nd.D := TBigDecimal.Create(Int64(2 * a + 1));
+    Nd.Q := q0 * Nd.D;
+    Nd.T := q0;
+  end
+  else
+  begin
+    m := a + (b - a) div 2;
+    AtanhRange(p0, q0, a, m, L);
+    AtanhRange(p0, q0, m, b, Rr);
+    Nd.P := L.P * Rr.P;
+    Nd.Q := L.Q * Rr.Q;
+    Nd.D := L.D * Rr.D;
+    Nd.T := L.T * Rr.Q + L.P * L.D * Rr.T;
+  end;
+end;
+
+procedure AtanhSplit(const p0, q0: TBigDecimal; N: Integer;
+  out T, Q: TBigDecimal);
+var
+  S: TAtanhNode;
+  GDefaultGuard: TSuspendDefault;
+begin
+  if (q0.Sign <= 0) or (N <= 0) then
+    raise EBigDecimalDomain.Create('binary split needs q0 > 0 and N > 0');
+  GDefaultGuard.Suspend;
+  AtanhRange(p0, q0, 0, N, S);
+  T := S.T;
+  Q := S.Q;
+end;
+
+{ Log10 of the chunk value Int(part) / 10^sExp. part holds decimal digits
+  (leading zeros allowed). }
+function ChunkLog10(const part: string; sExp: Int64): Double;
+var
+  m: string;
+  v: Int64;
+  code: Integer;
+begin
+  m := part;
+  while (Length(m) > 1) and (m[1] = '0') do Delete(m, 1, 1);
+  if Length(m) > 15 then
+    Result := Ln(StrToInt64(Copy(m, 1, 15))) / Ln(10) + (Length(m) - 15)
+  else
+  begin
+    Val(m, v, code);
+    if (code <> 0) or (v <= 0) then
+      raise EBigDecimalDomain.Create('bad chunk digits');
+    Result := Log10(v);
+  end;
+  Result := Result - sExp;
+end;
+
+function ExpBitBurstCore(const R: TFx): TFx;
+var
+  W, Lu, f, idx, grp, take, k, N: Integer;
+  digits, part: string;
+  p: Integer;
+  sExp: Int64;
+  p0, q0, T, Q: TBigDecimal;
+  acc, term: TFx;
+  logc, logt: Double;
+  GDefaultGuard: TSuspendDefault;
+begin
+  GDefaultGuard.Suspend;
+  W := R.W;
+  if W <= 0 then
+    raise EBigDecimalDomain.Create('bit-burst needs scale above 0');
+  if R.V.IsZero then Exit(FxFromInt(1, W));
+  if Abs(SignedApprox(R.V)) > 1.2 then
+    raise EBigDecimalDomain.Create('bit-burst needs a reduced argument');
+  digits := R.V.Abs.ToPlainString;
+  p := Pos('.', digits);
+  if p > 0 then Delete(digits, p, 1);
+  Lu := Length(digits);
+  f := 1;
+  while (f <= Lu) and (digits[f] = '0') do Inc(f);
+  if f > Lu then Exit(FxFromInt(1, W));
+  acc := FxFromInt(1, W + 25);
+  idx := f;
+  grp := 1;
+  while idx <= Lu do
+  begin
+    take := grp;
+    if take > Lu - idx + 1 then take := Lu - idx + 1;
+    part := Copy(digits, idx, take);
+    { Chunk value = Int(part) / 10^sExp with sExp = W - Lu + (idx + take - 1). }
+    sExp := Int64(W) - Lu + (idx + take - 1);
+    p0 := TBigDecimal.Create(part);
+    if not p0.IsZero then
+    begin
+      if sExp <= 0 then
+      begin
+        if sExp < 0 then
+          p0 := p0.Multiply(IntPow10(-sExp), Unlimited);
+        q0 := TBigDecimal.One;
+      end
+      else
+        q0 := IntPow10(sExp);
+      if R.V.Sign < 0 then p0 := -p0;
+      logc := ChunkLog10(part, sExp);
+      logt := 0.0;
+      N := 0;
+      while True do
+      begin
+        Inc(N);
+        logt := logt + logc - Log10(N);
+        if logt < -(W + 35) then Break;
+        if N > 1000000 then
+          raise EBigDecimalPrecision.Create('bit-burst term count overflow');
+      end;
+      Inc(N, 3);
+      ExpTaylorSplit(p0, q0, N, T, Q);
+      term := FxDiv(FxFromDecimal(T, W + 25), FxFromDecimal(Q, W + 25));
+      term.E := term.E + Power(10.0, logt + (W + 25) + 0.30103) + 2.0;
+      acc := FxMul(acc, term);
+    end;
+    idx := idx + take;
+    grp := grp * 2;
+  end;
+  Result := FxRescale(acc, W);
+end;
+
 { exp(X) = Result * 10^K. W is the scale of X. }
 function ExpFxCore(const X: TFx; out K: Int64): TFx;
 var
@@ -335,6 +558,11 @@ begin
   end
   else
     r := X;
+  if (W >= ExpBitBurstDigits) and (Abs(SignedApprox(r.V)) <= 1.2) then
+  begin
+    Result := ExpBitBurstCore(r);
+    Exit;
+  end;
   s := Min(40, Trunc(Sqrt(Double(W))));
   if s < 1 then s := 1;
   rp := FxDivInt(r, Int64(1) shl s);
@@ -410,6 +638,67 @@ const
     (A: 8; B: 1; Ex: (3, 0, 0, 0)),
     (A: 9; B: 1; Ex: (0, 2, 0, 0)));
 
+{ Count of atanh series terms below W + 35 digits for 2*atanh(zne/zde).
+  Term k holds (z^2)^k / (2k+1); its log is k * logc - log10(2k+1) with a
+  single denominator factor. }
+function LnAtanhCount(const zne, zde: TBigDecimal; W: Integer): Integer;
+var
+  zd, logc, logt: Double;
+  N: Integer;
+  GDefaultGuard: TSuspendDefault;
+begin
+  GDefaultGuard.Suspend;
+  zd := ApproxAbs(zne) / ApproxAbs(zde);
+  logc := 2 * Math.Log10(Abs(zd));
+  N := 0;
+  logt := 0.0;
+  while True do
+  begin
+    Inc(N);
+    logt := N * logc - Math.Log10(2 * N + 1);
+    if logt < -(W + 35) then Break;
+    if N > 1000000 then
+      raise EBigDecimalPrecision.Create('atanh term count overflow');
+  end;
+  Result := N + 3;
+end;
+
+{ True when binary splitting beats the term loop: the split top size,
+  in limbs, stays within LnSplitTopMul multiples of the working size. }
+function LnSplitUseful(const zne, zde: TBigDecimal; W: Integer): Boolean;
+var
+  va, vb: TMagView;
+  N: Integer;
+begin
+  N := LnAtanhCount(zne, zde, W);
+  GetMagView(zne, va);
+  GetMagView(zde, vb);
+  Result := Int64(va.N + vb.N) * Int64(N) <=
+    Int64(LnSplitTopMul) * Int64(W div 9 + 1);
+end;
+
+{ 2 * atanh(zne / zde) as a fixed-point value at scale W, by binary
+  splitting the atanh series. zne and zde are exact. }
+function LnAtanhFx(const zne, zde: TBigDecimal; W: Integer): TFx;
+var
+  p0, q0, T, Q, num, den: TBigDecimal;
+  N: Integer;
+  logt: Double;
+  GDefaultGuard: TSuspendDefault;
+begin
+  GDefaultGuard.Suspend;
+  N := LnAtanhCount(zne, zde, W);
+  p0 := zne * zne;
+  q0 := zde * zde;
+  AtanhSplit(p0, q0, N, T, Q);
+  num := TBigDecimal.Create(2) * zne * T;
+  den := zde * Q;
+  Result := FxDiv(FxFromDecimal(num, W), FxFromDecimal(den, W));
+  { The omitted tail sits below the count bound; the term tracks it here. }
+  logt := -(W + 35);
+  Result.E := Result.E + Power(10.0, logt + W + 0.30103) + 2.0;
+end;
+
 { ln(X) for X > 0 as a fixed-point value at scale W. }
 function LnFxCore(const X: TBigDecimal; W: Integer): TFx;
 var
@@ -418,7 +707,7 @@ var
   md, best, dist: Double;
   ci, i, j, kterm: Integer;
   zn, zd, z, z2, t, sum, term, res, cl: TFx;
-  mb: TBigDecimal;
+  mb, zne, zde: TBigDecimal;
   W2: Integer;
   primes: array[0..3] of Integer = (2, 3, 5, 7);
   lim: Double;
@@ -451,20 +740,27 @@ begin
     sum := FxFromInt(0, W)
   else
   begin
-    z := FxDiv(zn, zd);
-    z2 := FxSqr(z);
-    t := z;
-    sum := z;
-    kterm := 1;
-    while not FxTiny(t) do
+    zne := mb - TBigDecimal.Create(LnTable[ci].A);
+    zde := mb + TBigDecimal.Create(LnTable[ci].A);
+    if (W >= LnSplitDigits) and LnSplitUseful(zne, zde, W) then
+      sum := LnAtanhFx(zne, zde, W)
+    else
     begin
-      t := FxMul(t, z2);
-      term := FxDivInt(t, 2 * kterm + 1);
-      sum := FxAdd(sum, term);
-      Inc(kterm);
+      z := FxDiv(zn, zd);
+      z2 := FxSqr(z);
+      t := z;
+      sum := z;
+      kterm := 1;
+      while not FxTiny(t) do
+      begin
+        t := FxMul(t, z2);
+        term := FxDivInt(t, 2 * kterm + 1);
+        sum := FxAdd(sum, term);
+        Inc(kterm);
+      end;
+      sum.E += 2;
+      sum := FxMulInt(sum, 2);
     end;
-    sum.E += 2;
-    sum := FxMulInt(sum, 2);
   end;
   res := sum;
   // + ln c
