@@ -13,3 +13,5 @@ link*.res
 lazarus/TBigDecimal.pas
 lazarus/*.lps
 lazarus/backup/
+.vscode/
+.codegraph/
