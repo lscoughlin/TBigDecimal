@@ -16,7 +16,8 @@
    [Brent, "Fast algorithms for high-precision computation of elementary functions"](https://maths-people.anu.edu.au/~brent/pd/RNC7-Brent.pdf)).
 4. `s` squarings restore the result. Each squaring loses about one bit, so
    the guard digit count grows by about `s · log10(2)`.
-5. For high precision (above about 1000 digits) switch to **bit-burst**:
-   split `r` into chunks of 1, 2, 4, 8, ... leading bits and use binary
-   splitting on each chunk ([Johansson, elementary functions](https://www.fredrikj.net/math/aric2023elementary.pdf)).
-   This gives O(M(p)·log²p). The library does not use it ([section 10](../future.md)).
+5. For high precision (at and above `ExpBitBurstDigits`, 8000 digits),
+   `ExpFxCore` switches to **bit-burst**: split `r` into chunks of 1, 2, 4, 8, ...
+   leading bits and use binary splitting on each chunk
+   ([Johansson, elementary functions](https://www.fredrikj.net/math/aric2023elementary.pdf)).
+   This gives O(M(p)·log²p).

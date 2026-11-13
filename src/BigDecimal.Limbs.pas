@@ -34,6 +34,9 @@ var
 { Quotient and remainder of x by 10^9. x must be below 2^64. }
 function DivMod1e9(x: UInt64; out r: UInt32): UInt64;
 
+{ High 64 bits of the 128-bit unsigned product a * b. }
+function MulHi64(a, b: UInt64): UInt64;
+
 function DigitCount(x: UInt32): Integer; inline;
 function DigitCount64(x: UInt64): Integer;
 
@@ -95,6 +98,25 @@ begin
   r := UInt32(x - Result * LimbBase);
 end;
 {$else}
+function MulHi64(a, b: UInt64): UInt64;
+var
+  a0, a1, b0, b1: UInt64;
+  p00, p01, p10, p11: UInt64;
+  mid, carry: UInt64;
+begin
+  a0 := a and $FFFFFFFF;
+  a1 := a shr 32;
+  b0 := b and $FFFFFFFF;
+  b1 := b shr 32;
+  p00 := a0 * b0;
+  p01 := a0 * b1;
+  p10 := a1 * b0;
+  p11 := a1 * b1;
+  mid := (p00 shr 32) + (p01 and $FFFFFFFF) + (p10 and $FFFFFFFF);
+  carry := mid shr 32;
+  Result := p11 + (p01 shr 32) + (p10 shr 32) + carry;
+end;
+
 function DivMod1e9(x: UInt64; out r: UInt32): UInt64;
 begin
   Result := x div LimbBase;

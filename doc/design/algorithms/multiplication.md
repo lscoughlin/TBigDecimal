@@ -8,8 +8,9 @@ benchmark sets per target ([`RESULTS.md`](../../RESULTS.md)).
 |--------------------|----------------------|-------|
 | 1 × n              | Single-limb loop     | One carry chain. |
 | below `KaratsubaThreshold` (160) | Schoolbook in column order | Described below. |
-| `KaratsubaThreshold` and up | Karatsuba   | O(n^1.585). |
-| unbalanced         | Split the long operand into chunks of the short operand's size | Keeps Karatsuba efficient. |
+| `KaratsubaThreshold` to `NttThreshold` | Karatsuba | O(n^1.585). |
+| `NttThreshold` (4096) and up | Number-Theoretic Transform (NTT) | O(n log n). Described below. |
+| unbalanced         | Split the long operand into chunks of the short operand's size | Keeps Karatsuba and NTT efficient. |
 
 **Column-order schoolbook (Comba).** The kernel computes one column of the
 product at a time. The sum of the products in a column accumulates in a
@@ -28,10 +29,36 @@ Karatsuba in base 10^9 works the same as in any base. The middle term
 `(a0+a1)(b0+b1) − a0b0 − a1b1` can need one extra limb. The scratch sizing
 accounts for this.
 
-A Schönhage-Strassen or NTT multiply is out of scope. A number of 10^5 limbs
-or more is beyond the target use. The multiplication entry point `MulMag` is
-the single place where such a method can be added.
+**Number-Theoretic Transform (NTT).** Products of `NttThreshold` limbs and
+above use a two-prime NTT convolution with Chinese Remainder Theorem (CRT)
+reconstruction.
 
-Squaring calls the same column-order kernel with both operands equal. A
-kernel that computes each cross product once and doubles the sum measured
-slower, because it needs a separate doubling pass.
+The transform uses two 64-bit prime moduli:
+- `P1 = 18446744069414584321` (`2^64 - 2^32 + 1`), with primitive root `G1 = 7` and 2-adic order `2^32`.
+- `P2 = 18446744056529682433` (`2^64 - 2^34 + 1`), with primitive root `G2 = 10` and 2-adic order `2^34`.
+
+A convolution coefficient is at most `min(na, nb) * (10^9 - 1)^2 < min(na, nb) * 10^18`.
+The product of the two primes is approximately `3.4 * 10^38`. This product exceeds
+`min(na, nb) * 10^18` for operand lengths up to `3 * 10^20` limbs. Two primes are
+sufficient for base 10^9 limbs. libmpdec uses three primes because its limbs use
+base 10^19, where coefficients exceed two 64-bit primes.
+
+The NTT pipeline operates as follows:
+1. The transform length `N` is the smallest power of two with `N >= na + nb`.
+2. For each prime, operand limbs are copied into zero-padded 64-bit arrays. A
+   radix-2 Decimation-In-Frequency (DIF) forward transform processes each operand.
+   Pointwise products are computed modulo the prime, and a radix-2
+   Decimation-In-Time (DIT) inverse transform recovers the convolution. The DIF and
+   DIT pair avoids bit-reversal permutations.
+3. CRT reconstruction combines the residues `r1` and `r2` using Garner's formula:
+   `t = (r2 - r1) * inv(P1) mod P2`, and `x = r1 + P1 * t`. The integer `x` fits
+   within 90 bits (held as two 64-bit words).
+4. A two-word carry pass adds the running carry to `x`, divides by 10^9 to
+   produce the result limb, and propagates the remainder carry to the next position.
+5. Squaring transforms the operand once and squares the pointwise frequency domain
+   coefficients.
+6. Unbalanced operands with `na >= 2 * nb` divide the longer operand into chunks
+   of `nb` limbs, matching the chunking structure of Karatsuba.
+
+Squaring calls `SqrSchool` below `KaratsubaThreshold`, Karatsuba `SqrRec` up to
+`NttThreshold`, and `NttSqrMag` at and above `NttThreshold`.

@@ -1519,7 +1519,7 @@ var
   q: TLimbs;
   nq, nr, tn: Integer;
   inexact, sticky: Boolean;
-  da, db, e, drop, sc, pref: Int64;
+  da, db, extraExp, drop, sc, pref: Int64;
   tmp, r: TLimbs;
   num, den, rem: TLimbs;
   pn, pd: PLimb;
@@ -1542,12 +1542,12 @@ begin
   neg := va.Neg <> vb.Neg;
   da := MagDigits(va.P, va.N);
   db := MagDigits(vb.P, vb.N);
-  e := db + p + 1 - da;
-  if e < 0 then e := 0;
+  extraExp := db + p + 1 - da;
+  if extraExp < 0 then extraExp := 0;
   pn := va.P; nn := va.N;
-  if e > 0 then
+  if extraExp > 0 then
   begin
-    nn := ScaledMag(va, e, num);
+    nn := ScaledMag(va, extraExp, num);
     pn := @num[0];
   end;
   pd := vb.P; nd := vb.N;
@@ -1556,7 +1556,7 @@ begin
   DivRemMag(pn, nn, pd, nd, @q[0], nq, @rem[0], nr);
   sticky := nr > 0;
   drop := MagDigits(@q[0], nq) - p;
-  sc := pref + e;
+  sc := pref + extraExp;
   SetLength(r, nq + 1);
   RoundMagDrop(@q[0], nq, drop, C.RoundingMode, neg, sticky, @r[0], tn, inexact);
   sc -= drop;

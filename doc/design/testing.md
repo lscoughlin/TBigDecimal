@@ -16,6 +16,11 @@
   `DivRem` identity `a = q·b + r`, `Sqrt(x²) = |x|`, and
   `Exp(Ln(x)) ≈ x` within the stated error. They also assert that every
   multiplication algorithm agrees with schoolbook on random operands.
+  NTT property tests verify that `(a * b) mod (10^9 - 1)` equals
+  `((a mod (10^9 - 1)) * (b mod (10^9 - 1))) mod (10^9 - 1)` via limb sums at
+  100,000 limbs, and test worst-case carries with all-nines limbs up to 1024 limbs.
+  NTT results are tested against Karatsuba up to 20,000 limbs, and against
+  100,000-digit Python oracle vectors.
 - **Rounding table.** A table drives all eight modes through the values
   `±5.5, ±2.5, ±1.6, ±1.1, ±1.0` (the table in the Java documentation).
 - **Fuzzing.** The vector generator uses a fixed seed and writes thousands of

@@ -5,7 +5,7 @@ COMMON   = -MObjFPC -Sh- -dMATH -Fusrc -Futests -FEbin
 DEBUG    = $(COMMON) -FUlib/debug -g -gl -Cr -Co -Ct -O1
 RELEASE  = $(COMMON) -FUlib/release -O3
 
-.PHONY: test bench benchsmall benchcompare benchbcd benchparse benchfinancial benchdivmod profile clean refs vectors heaptest
+.PHONY: test bench benchsmall benchcompare benchbigmul benchbcd benchparse benchfinancial benchdivmod profile clean refs vectors heaptest
 
 refs:
 	sh tools/fetchrefs.sh
@@ -39,6 +39,13 @@ benchcompare:
 	$(FPC) $(RELEASE) bench/BenchCompare.lpr
 	./bin/BenchCompare
 	python3 -W ignore tools/benchpython.py
+
+# Times large multiplication against Python decimal for 30k to 3M digits.
+benchbigmul:
+	@mkdir -p lib/release bin
+	$(FPC) $(RELEASE) bench/BenchBigMul.lpr
+	./bin/BenchBigMul
+	python3 -W ignore tools/benchpython.py --bigmul
 
 # Compares add, multiply and divide with TBcd of the RTL unit FmtBCD.
 benchbcd:

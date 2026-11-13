@@ -32,8 +32,7 @@ round the result.
   accuracy of the estimate, and a counter of estimates that needed more than
   six corrections (`NewtonFallbacks`) stays at zero in the tests. Knuth's
   algorithm is faster below the threshold, because its inner loop costs little
-  per limb pair. Recursive Burnikel-Ziegler division is an alternative that the
-  library does not use.
+  per limb pair.
 - **Burnikel-Ziegler recursion.** Above `BZDivThreshold` (512 limbs) with the
   dividend within 256 limbs below twice the divisor, division recurses on 2n-by-n
   blocks with asymmetric halves, a one-limb pre-step, and correction loops of

@@ -34,6 +34,8 @@ function BigLn2(const C: TMathContext): TBigDecimal; overload;
 function BigLn10(const C: TMathContext): TBigDecimal; overload;
 function BigPi: TBigDecimal; overload;
 function BigE: TBigDecimal; overload;
+function BigLn2: TBigDecimal; overload;
+function BigLn10: TBigDecimal; overload;
 
 implementation
 
@@ -299,6 +301,22 @@ var
 begin
   if not EffectiveContext(c) then raise EBigDecimalNoContext.Create('E needs a context');
   Result := BigE(c);
+end;
+
+function BigLn2: TBigDecimal;
+var
+  c: TMathContext;
+begin
+  if not EffectiveContext(c) then raise EBigDecimalNoContext.Create('Ln2 needs a context');
+  Result := BigLn2(c);
+end;
+
+function BigLn10: TBigDecimal;
+var
+  c: TMathContext;
+begin
+  if not EffectiveContext(c) then raise EBigDecimalNoContext.Create('Ln10 needs a context');
+  Result := BigLn10(c);
 end;
 
 initialization

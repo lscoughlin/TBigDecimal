@@ -18,5 +18,9 @@
   in 10^18 limbs with 128-bit products, would reduce the gap.
 - **Reciprocal-root square root.** A Newton iteration for `1/sqrt(x)` needs
   only multiplications and avoids the divisions of the integer iteration.
+- **NTT optimizations.** Radix-4 butterfly decomposition to halve memory passes,
+  transform lengths `3 * 2^k` to reduce power-of-two padding overhead, four-step
+  cache-blocked transform layout for operands exceeding L2 cache, and high-half cyclic
+  products for Newton reciprocal division.
 - **Other targets.** Builds and runs on x86_64, Linux and Windows. The
   `DivMod1e9` form for x86_64 (`mul`) is not enabled.

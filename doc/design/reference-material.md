@@ -65,6 +65,16 @@ identify the inspected files.
   inputs and expected values from the rounding mode table in the
   `RoundingMode` documentation.
 
+**libmpdec 4.0.1.**
+- Source: <https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.1.tar.gz>.
+  Archive SHA-256: `96d33abb4bb0070c7be0fed4246cd38416188325f820468214471938545b1ac8`.
+  Inspected on 2026-11-13.
+- Author: Stefan Krah.
+- Inspected files: `mpdecimal.c`, `basearith.c`, `convolute.c`, `fnt.c`, `crt.c`,
+  `numbertheory.c`, `constants.c`, and the `literature/` directory.
+- Facts taken: prime moduli `P1 = 2^64 - 2^32 + 1` and `P2 = 2^64 - 2^34 + 1` with
+  their primitive roots `G1 = 7` and `G2 = 10`, and transform selection by size.
+
 **OEIS b-files for combinatorial values.** Each file lists `index value`
 pairs. Each file was downloaded and checked against Python `math` (exact
 integer arithmetic) on 2026-10-15. All entries matched.

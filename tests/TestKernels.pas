@@ -13,7 +13,7 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry,
-  BigDecimal.Types, BigDecimal.Limbs, BigDecimal.Multiply, BigDecimal.Divide;
+  BigDecimal.Types, BigDecimal.Limbs, BigDecimal.Multiply, BigDecimal.Divide, BigDecimal.Ntt;
 
 type
   TKernelTests = class(TTestCase)
@@ -28,6 +28,12 @@ type
     procedure TestNewtonEqualsKnuth;
     procedure TestScopeRestores;
     procedure TestThreadsHaveSeparateDefaults;
+    procedure TestNttModuliAndRoots;
+    procedure TestNttTransformRoundTrip;
+    procedure TestNttEqualsSchoolbookAndKaratsuba;
+    procedure TestNttWorstCaseLimbs;
+    procedure TestNttLargeKaratsubaAgreement;
+    procedure TestNttPropertyModBaseMinusOne;
   end;
 
 implementation
@@ -282,6 +288,256 @@ begin
   AssertEquals(34, TMathContext.Default.Precision);
   a.Free; b.Free;
   TMathContext.ClearDefault;
+end;
+
+procedure TKernelTests.TestNttModuliAndRoots;
+begin
+  // Primitive roots and order checks: G^((p-1)/2) = p - 1 and G^(p-1) = 1
+  AssertEquals('P1 root order', P1 - 1, PowModP1(G1, (P1 - 1) div 2));
+  AssertEquals('P1 root full', UInt64(1), PowModP1(G1, P1 - 1));
+  AssertEquals('P2 root order', P2 - 1, PowModP2(G2, (P2 - 1) div 2));
+  AssertEquals('P2 root full', UInt64(1), PowModP2(G2, P2 - 1));
+  AssertEquals('P1 mod P2 inverse', UInt64(1), MulModP2(P1 mod P2, INV_P1_MOD_P2));
+
+  // Fixed PowMod table check
+  AssertEquals(UInt64(1), PowModP1(12345, 0));
+  AssertEquals(UInt64(12345), PowModP1(12345, 1));
+  AssertEquals(UInt64(152399025), PowModP1(12345, 2));
+  AssertEquals(UInt64(1881365963625), PowModP1(12345, 3));
+end;
+
+procedure TKernelTests.TestNttTransformRoundTrip;
+var
+  len, i, k: Integer;
+  a, orig: array of UInt64;
+  wTable, wInvTable: array of UInt64;
+  ninv: UInt64;
+  r1, r2, rOut: TLimbs;
+  n1: Integer;
+begin
+  // Test lengths 2^1 to 2^16 round trip
+  for k := 1 to 16 do
+  begin
+    len := 1 shl k;
+    SetLength(a, len);
+    SetLength(orig, len);
+    SetLength(wTable, len);
+    SetLength(wInvTable, len);
+    for i := 0 to len - 1 do
+    begin
+      orig[i] := Random(LimbBase);
+      a[i] := orig[i];
+    end;
+
+    // Prime 1
+    BuildTablesP1(len, @wTable[0], @wInvTable[0]);
+    DifTransformP1(@a[0], len, @wTable[0]);
+    DitTransformP1(@a[0], len, @wInvTable[0]);
+    ninv := PowModP1(len, P1 - 2);
+    for i := 0 to len - 1 do
+      a[i] := MulModP1(a[i], ninv);
+    for i := 0 to len - 1 do
+      if a[i] <> orig[i] then
+        Fail('P1 round trip failed at len ' + IntToStr(len) + ' index ' + IntToStr(i));
+
+    // Prime 2
+    for i := 0 to len - 1 do a[i] := orig[i];
+    BuildTablesP2(len, @wTable[0], @wInvTable[0]);
+    DifTransformP2(@a[0], len, @wTable[0]);
+    DitTransformP2(@a[0], len, @wInvTable[0]);
+    ninv := PowModP2(len, P2 - 2);
+    for i := 0 to len - 1 do
+      a[i] := MulModP2(a[i], ninv);
+    for i := 0 to len - 1 do
+      if a[i] <> orig[i] then
+        Fail('P2 round trip failed at len ' + IntToStr(len) + ' index ' + IntToStr(i));
+  end;
+
+  // Test cyclic convolution of two short arrays equals direct sum
+  SetLength(r1, 8);
+  SetLength(r2, 8);
+  r1[0] := 1; r1[1] := 2; r1[2] := 3; r1[3] := 4;
+  r2[0] := 5; r2[1] := 6; r2[2] := 7;
+  SetLength(rOut, 8);
+  n1 := NttMulMag(@r1[0], 4, @r2[0], 3, @rOut[0]);
+  // direct convolution:
+  // c0 = 5, c1 = 16, c2 = 34, c3 = 52, c4 = 45, c5 = 28
+  AssertEquals(6, n1);
+  AssertEquals(UInt32(5), rOut[0]);
+  AssertEquals(UInt32(16), rOut[1]);
+  AssertEquals(UInt32(34), rOut[2]);
+  AssertEquals(UInt32(52), rOut[3]);
+  AssertEquals(UInt32(45), rOut[4]);
+  AssertEquals(UInt32(28), rOut[5]);
+end;
+
+procedure TKernelTests.TestNttEqualsSchoolbookAndKaratsuba;
+var
+  i, na, nb, mode: Integer;
+  a, b, r1, r2: TLimbs;
+  n1, n2: Integer;
+  sizes: array of Integer;
+  idx: Integer;
+begin
+  Randomize;
+  // Test lengths near powers of two
+  sizes := [1, 2, 3, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+            255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 2047, 2048, 2049];
+  for idx := 0 to High(sizes) do
+  begin
+    na := sizes[idx];
+    nb := sizes[High(sizes) - idx];
+    if nb > 600 then nb := 600;
+    a := RandLimbs(na, 0);
+    b := RandLimbs(nb, 0);
+    SetLength(r1, na + nb);
+    SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('near power-2 length ' + IntToStr(na) + 'x' + IntToStr(nb), n1, n2);
+    AssertEquals('near power-2 value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+  end;
+
+  // Unbalanced: nb = 1, nb = 2, and na >> nb (16:1, 100:1)
+  for i := 1 to 50 do
+  begin
+    na := 100 + Random(500);
+    nb := 1;
+    a := RandLimbs(na, 0); b := RandLimbs(nb, 0);
+    SetLength(r1, na + nb); SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('unbalanced nb=1 value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+
+    nb := 2;
+    b := RandLimbs(nb, 0);
+    SetLength(r1, na + nb); SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('unbalanced nb=2 value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+
+    nb := na div 16;
+    if nb < 1 then nb := 1;
+    b := RandLimbs(nb, 0);
+    SetLength(r1, na + nb); SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('unbalanced 16:1 value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+
+    nb := na div 100;
+    if nb < 1 then nb := 1;
+    b := RandLimbs(nb, 0);
+    SetLength(r1, na + nb); SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('unbalanced 100:1 value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+  end;
+
+  // Operands with long runs of zero limbs, and a single non-zero limb
+  for i := 1 to 30 do
+  begin
+    na := 300; nb := 300;
+    SetLength(a, na); SetLength(b, nb);
+    for idx := 0 to na - 1 do a[idx] := 0;
+    for idx := 0 to nb - 1 do b[idx] := 0;
+    a[Random(na)] := 1 + Random(LimbBase - 1);
+    b[Random(nb)] := 1 + Random(LimbBase - 1);
+    if a[na - 1] = 0 then a[na - 1] := 1;
+    if b[nb - 1] = 0 then b[nb - 1] := 1;
+    SetLength(r1, na + nb); SetLength(r2, na + nb);
+    n1 := MulMagForce(@a[0], na, @b[0], nb, @r1[0], mkSchool);
+    n2 := NttMulMag(@a[0], na, @b[0], nb, @r2[0]);
+    AssertEquals('sparse limbs value', 0, CmpMag(@r1[0], n1, @r2[0], n2));
+  end;
+end;
+
+procedure TKernelTests.TestNttWorstCaseLimbs;
+var
+  sizes: array of Integer;
+  idx, n, n1, n2: Integer;
+  a, b, r1, r2: TLimbs;
+  i: Integer;
+begin
+  // Worst-case coefficients: every limb 999999999 (LimbBase - 1)
+  sizes := [10, 64, 128, 256, 512, 1024];
+  for idx := 0 to High(sizes) do
+  begin
+    n := sizes[idx];
+    SetLength(a, n); SetLength(b, n);
+    for i := 0 to n - 1 do
+    begin
+      a[i] := LimbBase - 1;
+      b[i] := LimbBase - 1;
+    end;
+    SetLength(r1, 2 * n); SetLength(r2, 2 * n);
+    n1 := MulMagForce(@a[0], n, @b[0], n, @r1[0], mkKaratsuba);
+    n2 := NttMulMag(@a[0], n, @b[0], n, @r2[0]);
+    AssertEquals('worst-case mul length n=' + IntToStr(n), n1, n2);
+    AssertEquals('worst-case mul value n=' + IntToStr(n), 0, CmpMag(@r1[0], n1, @r2[0], n2));
+
+    // Squaring form
+    n2 := NttSqrMag(@a[0], n, @r2[0]);
+    AssertEquals('worst-case sqr length n=' + IntToStr(n), n1, n2);
+    AssertEquals('worst-case sqr value n=' + IntToStr(n), 0, CmpMag(@r1[0], n1, @r2[0], n2));
+  end;
+end;
+
+procedure TKernelTests.TestNttLargeKaratsubaAgreement;
+var
+  sizes: array of Integer;
+  idx, n, n1, n2: Integer;
+  a, b, r1, r2: TLimbs;
+begin
+  Randomize;
+  sizes := [5000, 10000, 20000];
+  for idx := 0 to High(sizes) do
+  begin
+    n := sizes[idx];
+    a := RandLimbs(n, 0);
+    b := RandLimbs(n, 0);
+    SetLength(r1, 2 * n);
+    SetLength(r2, 2 * n);
+    n1 := MulMagForce(@a[0], n, @b[0], n, @r1[0], mkKaratsuba);
+    n2 := NttMulMag(@a[0], n, @b[0], n, @r2[0]);
+    AssertEquals('large kara agreement length n=' + IntToStr(n), n1, n2);
+    AssertEquals('large kara agreement value n=' + IntToStr(n), 0, CmpMag(@r1[0], n1, @r2[0], n2));
+  end;
+end;
+
+procedure TKernelTests.TestNttPropertyModBaseMinusOne;
+var
+  n, i, nr: Integer;
+  a, b, r: TLimbs;
+  sumA, sumB, sumR: UInt64;
+  modulus: UInt64;
+  expectedMod: UInt64;
+begin
+  Randomize;
+  modulus := LimbBase - 1; // 10^9 - 1 = 999999999
+  n := 100000;
+  a := RandLimbs(n, 0);
+  b := RandLimbs(n, 0);
+  SetLength(r, 2 * n);
+
+  sumA := 0;
+  for i := 0 to n - 1 do
+    sumA := (sumA + a[i]) mod modulus;
+
+  sumB := 0;
+  for i := 0 to n - 1 do
+    sumB := (sumB + b[i]) mod modulus;
+
+  expectedMod := MulModP1(sumA, sumB) mod modulus; // (sumA * sumB) mod (10^9 - 1)
+  expectedMod := (sumA * sumB) mod modulus;
+
+  nr := NttMulMag(@a[0], n, @b[0], n, @r[0]);
+  AssertTrue('result non-empty', nr > 0);
+
+  sumR := 0;
+  for i := 0 to nr - 1 do
+    sumR := (sumR + r[i]) mod modulus;
+
+  AssertEquals('mod 10^9 - 1 property at 100k limbs', expectedMod, sumR);
 end;
 
 initialization

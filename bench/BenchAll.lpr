@@ -166,12 +166,17 @@ end;
 
 procedure DoSchool;
 begin
-  MulMagForce(@GA[0], GNA, @GB[0], GNB, @GR[0], False);
+  MulMagForce(@GA[0], GNA, @GB[0], GNB, @GR[0], mkSchool);
 end;
 
 procedure DoKara;
 begin
-  MulMagForce(@GA[0], GNA, @GB[0], GNB, @GR[0], True);
+  MulMagForce(@GA[0], GNA, @GB[0], GNB, @GR[0], mkKaratsuba);
+end;
+
+procedure DoNtt;
+begin
+  MulMagForce(@GA[0], GNA, @GB[0], GNB, @GR[0], mkNTT);
 end;
 
 procedure DoKnuth;
@@ -209,6 +214,21 @@ begin
     reps := CalReps(@DoSchool);
     TimeBoth(reps, @DoSchool, @DoKara, t1, t2);
     WriteLn(n : 5, t1 : 12 : 2, t2 : 12 : 2, '   ', Pick(t2 < t1, 'karatsuba', 'schoolbook'),
+      Format('  median %.2f/%.2f spread %.1f%%/%.1f%%', [GMed1, GMed2, GSpread1, GSpread2]));
+  end;
+  WriteLn;
+  WriteLn('Multiplication, microseconds per product (Karatsuba vs NTT)');
+  WriteLn('limbs   karatsuba    ntt          winner');
+  sizes := [512, 1024, 2048, 4096, 8192, 16384, 65536];
+  for ii := 0 to High(sizes) do
+  begin
+    n := sizes[ii];
+    GNA := n; GNB := n;
+    GA := RandLimbs(n); GB := RandLimbs(n);
+    SetLength(GR, 2 * n);
+    reps := CalReps(@DoKara);
+    TimeBoth(reps, @DoKara, @DoNtt, t1, t2);
+    WriteLn(n : 5, t1 : 12 : 2, t2 : 12 : 2, '   ', Pick(t2 < t1, 'ntt', 'karatsuba'),
       Format('  median %.2f/%.2f spread %.1f%%/%.1f%%', [GMed1, GMed2, GSpread1, GSpread2]));
   end;
   WriteLn;

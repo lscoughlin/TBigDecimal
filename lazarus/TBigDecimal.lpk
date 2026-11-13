@@ -28,7 +28,7 @@
     <Description Value="Arbitrary-precision decimal arithmetic: the TBigDecimal record with rounding modes, a thread-local default context, Sqrt, Exp, Ln, Pow, trigonometry, combinatorics, Gamma and financial helpers."/>
     <License Value="LGPL-2.1-only WITH Independent-modules-exception"/>
     <Version Major="0" Minor="4"/>
-    <Files Count="14">
+    <Files Count="15">
       <Item1>
         <Filename Value="../src/BigDecimal.pas"/>
         <UnitName Value="BigDecimal"/>
@@ -85,6 +85,10 @@
         <Filename Value="../src/BigDecimal.Financial.pas"/>
         <UnitName Value="BigDecimal.Financial"/>
       </Item14>
+      <Item15>
+        <Filename Value="../src/BigDecimal.Values.pas"/>
+        <UnitName Value="BigDecimal.Values"/>
+      </Item15>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

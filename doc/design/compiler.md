@@ -47,5 +47,7 @@ The research on FPC behavior gives these points
   pointer to a reference counted block and management operators would avoid
   that cost, but FPC 3.2.4 does not call the management operators as documented
   ([`management-operators.md`](../management-operators.md)), so the library does not use them.
-- Scratch buffers for Karatsuba and Newton iteration are allocated once per
-  top-level call and passed down. Recursive calls never allocate.
+- Scratch buffers for Karatsuba, Newton iteration and NTT arrays are
+  allocated once per top-level call with `GetMem` in a `try...finally` block and
+  passed down. Butterfly transformation loops contain no `try` blocks, allowing
+  FPC to keep inner loop variables in CPU registers. Recursive calls never allocate.

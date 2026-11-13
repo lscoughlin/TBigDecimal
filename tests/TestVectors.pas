@@ -53,6 +53,7 @@ type
     procedure TestRising;
     procedure TestGamma;
     procedure TestLnGamma;
+    procedure TestNttMul;
   end;
 
 function ParseMode(const S: string): TRoundingMode;
@@ -236,6 +237,7 @@ procedure TVectorTests.TestPrimorial; begin RunFile('primorial'); end;
 procedure TVectorTests.TestRising; begin RunFile('rising'); end;
 procedure TVectorTests.TestGamma; begin RunFile('gamma'); end;
 procedure TVectorTests.TestLnGamma; begin RunFile('lngamma'); end;
+procedure TVectorTests.TestNttMul; begin RunFile('nttmul'); end;
 
 initialization
   RegisterTest(TVectorTests);

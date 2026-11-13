@@ -8,7 +8,9 @@
   formulas.
 - The code evaluates `ln(1+u)` as `2·atanh(z)` with `z = u/(2+u)`. This series has
   only odd powers and converges as `z²`. At 34 digits it needs about 15 to 20
-  terms. It is the fastest method at low and medium precision.
+  terms. At and above `LnSplitDigits` (1000 digits), binary splitting evaluates
+  the series efficiently when the operand limbs permit. It is the fastest method
+  at low and medium precision.
 - `ln(2)`, `ln(10)` and the table values are cached per working precision.
   The constants cache ([section 5.6](constants.md)) holds them.
 - For precision above a few thousand digits, a Newton iteration on `Exp`

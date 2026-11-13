@@ -20,7 +20,7 @@ in its model and its names. A value is an unscaled integer of any size and a
 - Financial functions: `Ln`, `Log10`, `Log`, `Exp`, `Pow` and `Sqrt`, with
   results at a precision the caller chooses.
 - High speed. The library uses the methods that FPC supports well: base 10^9
-  limbs, 64-bit intermediate products, constant divisors, and algorithms that
+  limbs, 64-bit intermediate products, constant divisors, Karatsuba and NTT convolution, and algorithms that
   change with operand size.
 
 ## Non-goals
@@ -124,6 +124,7 @@ make test     # downloads reference files, builds, runs the fpcunit suites
 make bench    # builds and runs the benchmark program
 make benchsmall    # small-value allocations and default-context cost
 make benchcompare  # timings next to Python decimal
+make benchbigmul   # large-scale multiplication next to Python decimal
 sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000
 ```
 

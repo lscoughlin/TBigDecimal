@@ -13,7 +13,8 @@ circular reference. The elementary functions therefore live in
 |--------------------------|---------|
 | `BigDecimal.Types`       | Enums, `TMathContext`, exception classes, constants (power-of-ten tables) |
 | `BigDecimal.Limbs`       | Magnitude kernels: compare, add, sub, shift by powers of ten, single-limb ops, digit count |
-| `BigDecimal.Multiply`    | Schoolbook, squaring, Karatsuba, unbalanced split |
+| `BigDecimal.Ntt`         | 64-bit number-theoretic transform with two moduli, forward DIF and inverse DIT, Garner CRT, carry pass |
+| `BigDecimal.Multiply`    | Schoolbook, squaring, Karatsuba, NTT routing, unbalanced split |
 | `BigDecimal.Divide`      | Knuth D, single-limb division, Newton reciprocal with block splitting |
 | `BigDecimal.Rounding`    | `RoundMagnitude` and the mode logic |
 | `BigDecimal.Convert`     | Parse, digit text, exact and correctly rounded `Double` conversion on raw limbs |
@@ -21,6 +22,7 @@ circular reference. The elementary functions therefore live in
 | `BigDecimal.Fixed`       | Fixed-point values with a running error bound; the Ziv interval check |
 | `BigDecimal.Elementary`  | `Sqrt`, `Exp`, `Ln`, `Log10`, `Log`, `Pow`, `Root` |
 | `BigDecimal.Constants`   | `Pi`, `E`, `Ln2`, `Ln10` with caches |
+| `BigDecimal.Values`      | `BigDecimalValues`, `DecimalValues` with static constants and common values |
 | `BigDecimal.Financial`   | Financial helpers |
 | `BigDecimal.Combinatorics` | Factorial, double factorial, primorial, falling and rising factorial, binomial, multinomial, Catalan, prime sieve |
 | `BigDecimal.Trig`        | `Sin`, `Cos`, `Tan` |

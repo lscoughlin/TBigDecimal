@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, Math, fpcunit, testregistry, BigDecimal.Types,
-  BigDecimal,
+  BigDecimal, BigDecimal.Values,
   BigDecimal.Fixed, BigDecimal.Elementary, BigDecimal.Trig,
   BigDecimal.Constants, BigDecimal.Combinatorics, BigDecimal.Gamma,
   BigDecimal.Financial, BigDecimal.Limbs, BigDecimal.Multiply,
@@ -89,6 +89,7 @@ type
     procedure TestExcelSplitVectors;
     procedure TestPeriodicRate;
     procedure TestExcelDefaultContext;
+    procedure TestStaticConstants;
   end;
 
 implementation
@@ -1677,6 +1678,145 @@ begin
     PeriodicRateXL(48, D('-200'), D('8000'), D('100'), ptBegin, D('0.2'), c)));
   AssertTrue(EffectiveRateXL(D('0.0525'), 4).Identical(EffectiveRateXL(D('0.0525'), 4, c)));
   AssertTrue(NominalRateXL(D('0.0535'), 4).Identical(NominalRateXL(D('0.0535'), 4, c)));
+end;
+
+procedure TLibraryTests.TestStaticConstants;
+var
+  c: TMathContext;
+  S: TMathContextScope;
+begin
+  // integers and powers of ten via BigDecimalValues
+  AssertTrue(BigDecimalValues.MinusOne.Identical(D('-1')));
+  AssertTrue(BigDecimalValues.NegativeOne.Identical(D('-1')));
+  AssertTrue(BigDecimalValues.Zero.Identical(D('0')));
+  AssertTrue(BigDecimalValues.Zero.IsZero);
+  AssertTrue(BigDecimalValues.One.Identical(D('1')));
+  AssertTrue(BigDecimalValues.Two.Identical(D('2')));
+  AssertTrue(BigDecimalValues.Three.Identical(D('3')));
+  AssertTrue(BigDecimalValues.Four.Identical(D('4')));
+  AssertTrue(BigDecimalValues.Five.Identical(D('5')));
+  AssertTrue(BigDecimalValues.Ten.Identical(D('10')));
+  AssertTrue(BigDecimalValues.Twelve.Identical(D('12')));
+  AssertTrue(BigDecimalValues.TwentyFour.Identical(D('24')));
+  AssertTrue(BigDecimalValues.FiftyTwo.Identical(D('52')));
+  AssertTrue(BigDecimalValues.Hundred.Identical(D('100')));
+  AssertTrue(BigDecimalValues.OneHundred.Identical(D('100')));
+  AssertTrue(BigDecimalValues.ThreeHundredSixty.Identical(D('360')));
+  AssertTrue(BigDecimalValues.Days360.Identical(D('360')));
+  AssertTrue(BigDecimalValues.ThreeHundredSixtyFive.Identical(D('365')));
+  AssertTrue(BigDecimalValues.Days365.Identical(D('365')));
+  AssertTrue(BigDecimalValues.ThreeHundredSixtySix.Identical(D('366')));
+  AssertTrue(BigDecimalValues.Days366.Identical(D('366')));
+  AssertTrue(BigDecimalValues.Thousand.Identical(D('1000')));
+  AssertTrue(BigDecimalValues.OneThousand.Identical(D('1000')));
+  AssertTrue(BigDecimalValues.TenThousand.Identical(D('10000')));
+  AssertTrue(BigDecimalValues.HundredThousand.Identical(D('100000')));
+  AssertTrue(BigDecimalValues.Million.Identical(D('1000000')));
+  AssertTrue(BigDecimalValues.OneMillion.Identical(D('1000000')));
+  AssertTrue(BigDecimalValues.Billion.Identical(D('1000000000')));
+  AssertTrue(BigDecimalValues.OneBillion.Identical(D('1000000000')));
+
+  // integers and powers of ten via DecimalValues
+  AssertTrue(DecimalValues.MinusOne.Identical(D('-1')));
+  AssertTrue(DecimalValues.Zero.Identical(D('0')));
+  AssertTrue(DecimalValues.One.Identical(D('1')));
+  AssertTrue(DecimalValues.Ten.Identical(D('10')));
+  AssertTrue(DecimalValues.Hundred.Identical(D('100')));
+  AssertTrue(DecimalValues.Thousand.Identical(D('1000')));
+  AssertTrue(DecimalValues.Million.Identical(D('1000000')));
+  AssertTrue(DecimalValues.Billion.Identical(D('1000000000')));
+
+  // fractional and financial basis
+  AssertTrue(BigDecimalValues.Half.Identical(D('0.5')));
+  AssertTrue(BigDecimalValues.Tenth.Identical(D('0.1')));
+  AssertTrue(BigDecimalValues.Percent.Identical(D('0.01')));
+  AssertTrue(BigDecimalValues.OnePercent.Identical(D('0.01')));
+  AssertTrue(BigDecimalValues.Cent.Identical(D('0.01')));
+  AssertTrue(BigDecimalValues.Permille.Identical(D('0.001')));
+  AssertTrue(BigDecimalValues.OnePermille.Identical(D('0.001')));
+  AssertTrue(BigDecimalValues.BasisPoint.Identical(D('0.0001')));
+  AssertTrue(BigDecimalValues.OneBasisPoint.Identical(D('0.0001')));
+
+  // fractional via DecimalValues
+  AssertTrue(DecimalValues.Half.Identical(D('0.5')));
+  AssertTrue(DecimalValues.Tenth.Identical(D('0.1')));
+  AssertTrue(DecimalValues.Percent.Identical(D('0.01')));
+  AssertTrue(DecimalValues.Cent.Identical(D('0.01')));
+  AssertTrue(DecimalValues.Permille.Identical(D('0.001')));
+  AssertTrue(DecimalValues.BasisPoint.Identical(D('0.0001')));
+
+  // scales
+  AssertEquals(0, BigDecimalValues.Zero.Scale);
+  AssertEquals(0, BigDecimalValues.One.Scale);
+  AssertEquals(0, BigDecimalValues.MinusOne.Scale);
+  AssertEquals(0, BigDecimalValues.Ten.Scale);
+  AssertEquals(0, BigDecimalValues.Hundred.Scale);
+  AssertEquals(0, BigDecimalValues.Thousand.Scale);
+  AssertEquals(1, BigDecimalValues.Half.Scale);
+  AssertEquals(1, BigDecimalValues.Tenth.Scale);
+  AssertEquals(2, BigDecimalValues.Percent.Scale);
+  AssertEquals(3, BigDecimalValues.Permille.Scale);
+  AssertEquals(4, BigDecimalValues.BasisPoint.Scale);
+
+  // mathematical constants with explicit context
+  c := TMathContext.Make(10, rmHalfEven);
+  AssertEquals('3.141592654', BigDecimalValues.Pi(c).ToString);
+  AssertEquals('2.718281828', BigDecimalValues.E(c).ToString);
+  AssertEquals('0.6931471806', BigDecimalValues.Ln2(c).ToString);
+  AssertEquals('2.302585093', BigDecimalValues.Ln10(c).ToString);
+
+  AssertEquals('3.141592654', DecimalValues.Pi(c).ToString);
+  AssertEquals('2.718281828', DecimalValues.E(c).ToString);
+  AssertEquals('0.6931471806', DecimalValues.Ln2(c).ToString);
+  AssertEquals('2.302585093', DecimalValues.Ln10(c).ToString);
+
+  AssertEquals('3.141592654', BigPi(c).ToString);
+  AssertEquals('2.718281828', BigE(c).ToString);
+  AssertEquals('0.6931471806', BigLn2(c).ToString);
+  AssertEquals('2.302585093', BigLn10(c).ToString);
+
+  // mathematical constants with default context
+  TMathContext.ClearDefault;
+  try
+    BigDecimalValues.Pi;
+    Fail('Pi without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    BigDecimalValues.E;
+    Fail('E without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    BigDecimalValues.Ln2;
+    Fail('Ln2 without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    BigDecimalValues.Ln10;
+    Fail('Ln10 without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    DecimalValues.Pi;
+    Fail('DecimalValues.Pi without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    BigLn2;
+    Fail('BigLn2 without context should raise');
+  except on EBigDecimalNoContext do; end;
+  try
+    BigLn10;
+    Fail('BigLn10 without context should raise');
+  except on EBigDecimalNoContext do; end;
+
+  S.Enter(c);
+  AssertEquals('3.141592654', BigDecimalValues.Pi.ToString);
+  AssertEquals('2.718281828', BigDecimalValues.E.ToString);
+  AssertEquals('0.6931471806', BigDecimalValues.Ln2.ToString);
+  AssertEquals('2.302585093', BigDecimalValues.Ln10.ToString);
+  AssertEquals('3.141592654', DecimalValues.Pi.ToString);
+  AssertEquals('2.718281828', DecimalValues.E.ToString);
+  AssertEquals('0.6931471806', DecimalValues.Ln2.ToString);
+  AssertEquals('2.302585093', DecimalValues.Ln10.ToString);
+  AssertEquals('0.6931471806', BigLn2.ToString);
+  AssertEquals('2.302585093', BigLn10.ToString);
 end;
 
 initialization

@@ -145,7 +145,7 @@ All library exceptions descend from `EBigDecimal`:
 ## Speed
 
 Values that fit in 64 bits use `Int64` arithmetic and allocate nothing. Larger
-values use base 10^9 limbs. Multiplication uses Karatsuba above 160 limbs.
-Division uses a Newton reciprocal above 4096 limbs. The elementary functions
-cost O(w²) limb operations at w digits, so a precision of many thousands of
-digits is slow (see `doc/RESULTS.md`).
+values use base 10^9 limbs. Multiplication uses Karatsuba above 160 limbs and the
+NTT from 4096 limbs. Division uses a Newton reciprocal above 4096 limbs and Burnikel-Ziegler
+above 512 limbs. The elementary functions cost O(w²) limb operations at w digits,
+so a precision of many thousands of digits is slow (see `doc/RESULTS.md`).

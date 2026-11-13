@@ -673,6 +673,19 @@ def xl_vectors():
         made += 1
     return rows
 
+def write_nttmul():
+    rows = []
+    C = Context(prec=300000, rounding=decimal.ROUND_HALF_EVEN,
+                Emax=decimal.MAX_EMAX, Emin=decimal.MIN_EMIN)
+    for _ in range(2):
+        d1 = digits(100000)
+        d2 = digits(100000)
+        a = Decimal(d1)
+        b = Decimal(d2)
+        prod = C.multiply(a, b)
+        rows.append(('mul', str(a), str(b), str(prod)))
+    w('nttmul', rows)
+
 def write_xl():
     for name, r in xl_vectors().items():
         w(name, r)
@@ -683,3 +696,4 @@ if __name__ == '__main__':
     write_comb()
     write_fin()
     write_xl()
+    write_nttmul()

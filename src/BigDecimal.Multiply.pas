@@ -19,11 +19,16 @@ unit BigDecimal.Multiply;
 interface
 
 uses
-  BigDecimal.Limbs;
+  BigDecimal.Limbs, BigDecimal.Ntt;
+
+type
+  TMulKernel = (mkSchool, mkKaratsuba, mkNTT);
 
 var
   { Limb count at which Karatsuba replaces schoolbook. Set from bench/BenchMul. }
   KaratsubaThreshold: Integer = 160;  // doc/RESULTS.md: tie between 128 and 160 limbs, 15% faster at 256
+  { Limb count at which NTT replaces Karatsuba. Set from bench/BenchAll. }
+  NttThreshold: Integer = 4096;       // doc/RESULTS.md: crossover between 4096 and 8192 limbs
 
 { r := a * b. r needs na + nb limbs and must not overlap a or b.
   Returns the normalized length. Both operands are normalized and non-empty. }
@@ -38,9 +43,15 @@ function SqrMag(a: PLimb; na: Integer; r: PLimb): Integer;
 procedure MulSchool(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb);
 procedure SqrSchool(a: PLimb; na: Integer; r: PLimb);
 
-{ Forces schoolbook or Karatsuba regardless of the threshold, for tests. }
+{ NTT multiplication and squaring wrappers. }
+function MulMagNTT(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb): Integer;
+function SqrMagNTT(a: PLimb; na: Integer; r: PLimb): Integer;
+
+{ Forces schoolbook, Karatsuba, or NTT regardless of the threshold, for tests. }
 function MulMagForce(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb;
-  UseKaratsuba: Boolean): Integer;
+  Kernel: TMulKernel): Integer; overload;
+function MulMagForce(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb;
+  UseKaratsuba: Boolean): Integer; overload;
 
 implementation
 
@@ -250,8 +261,18 @@ begin
   Result := NormLen(r, na + nb);
 end;
 
+function MulMagNTT(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb): Integer;
+begin
+  Result := NttMulMag(a, na, b, nb, r);
+end;
+
+function SqrMagNTT(a: PLimb; na: Integer; r: PLimb): Integer;
+begin
+  Result := NttSqrMag(a, na, r);
+end;
+
 function MulMagImpl(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb;
-  UseK: Boolean): Integer;
+  Kernel: TMulKernel): Integer;
 var
   t: PLimb;
   tn: Integer;
@@ -265,13 +286,20 @@ begin
     tn := na; na := nb; nb := tn;
   end;
   // now na >= nb
-  if (nb < KaratsubaThreshold) or (not UseK) then
+  if (Kernel = mkSchool) or ((Kernel = mkKaratsuba) and (nb < KaratsubaThreshold)) or
+     ((Kernel = mkNTT) and (nb < KaratsubaThreshold)) then
   begin
     MulSchool(a, na, b, nb, r);
     Exit(NormLen(r, na + nb));
   end;
-  if na < 2 * nb then
-    Exit(MulBalanced(a, na, b, nb, r, UseK));
+  if (Kernel = mkNTT) and (nb >= NttThreshold) then
+  begin
+    if na < 2 * nb then
+      Exit(NttMulMag(a, na, b, nb, r));
+  end
+  else if na < 2 * nb then
+    Exit(MulBalanced(a, na, b, nb, r, True));
+
   // unbalanced: chunks of nb limbs of the long operand
   for i := 0 to na + nb - 1 do
     r[i] := 0;
@@ -283,11 +311,16 @@ begin
       chunk := na - off;
       if chunk > nb then chunk := nb;
       if chunk = nb then
-        c := MulBalanced(a + off, chunk, b, nb, tmp, UseK)
+      begin
+        if (Kernel = mkNTT) and (nb >= NttThreshold) then
+          c := NttMulMag(a + off, chunk, b, nb, tmp)
+        else
+          c := MulBalanced(a + off, chunk, b, nb, tmp, True);
+      end
       else
       begin
         // short last chunk: swap roles
-        c := MulMagImpl(b, nb, a + off, chunk, tmp, UseK);
+        c := MulMagImpl(b, nb, a + off, chunk, tmp, Kernel);
       end;
       AddInto(r + off, na + nb - off, tmp, c);
       off += chunk;
@@ -300,13 +333,22 @@ end;
 
 function MulMag(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb): Integer;
 begin
-  Result := MulMagImpl(a, na, b, nb, r, True);
+  Result := MulMagImpl(a, na, b, nb, r, mkNTT);
+end;
+
+function MulMagForce(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb;
+  Kernel: TMulKernel): Integer;
+begin
+  Result := MulMagImpl(a, na, b, nb, r, Kernel);
 end;
 
 function MulMagForce(a: PLimb; na: Integer; b: PLimb; nb: Integer; r: PLimb;
   UseKaratsuba: Boolean): Integer;
 begin
-  Result := MulMagImpl(a, na, b, nb, r, UseKaratsuba);
+  if UseKaratsuba then
+    Result := MulMagImpl(a, na, b, nb, r, mkKaratsuba)
+  else
+    Result := MulMagImpl(a, na, b, nb, r, mkSchool);
 end;
 
 function SqrMag(a: PLimb; na: Integer; r: PLimb): Integer;
@@ -320,6 +362,9 @@ begin
     SqrSchool(a, na, r);
     Exit(NormLen(r, 2 * na));
   end;
+  if na >= NttThreshold then
+    Exit(NttSqrMag(a, na, r));
+
   total := ScratchSize(na) + 2 * na;
   GetMem(buf, total * SizeOf(TLimb));
   try

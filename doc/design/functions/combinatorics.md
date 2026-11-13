@@ -26,7 +26,7 @@ arithmetic, with a safety margin.
 **Factorial.** Three size classes:
 
 1. `n ≤ 20`: a constant table of `UInt64` values (20! is below 2^63).
-2. `n` up to a threshold (about 1000, set by benchmark): binary splitting of
+2. `n` up to a threshold (about 600, set by benchmark): binary splitting of
    the range `2..n`. The code first packs factors into `UInt64` words (as many
    as keep the product below 1.8 × 10^19), then multiplies the words in a
    balanced tree. This is the first of the two methods in the GMP manual:
