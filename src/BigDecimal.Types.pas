@@ -83,9 +83,9 @@ type
 const
   { Version of the library (major.minor.release). The Lazarus package
     lazarus/TBigDecimal.lpk carries the same number. }
-  BigDecimalVersion = '0.4.0';
+  BigDecimalVersion = '0.5.0';
   BigDecimalVersionMajor = 0;
-  BigDecimalVersionMinor = 4;
+  BigDecimalVersionMinor = 5;
   BigDecimalVersionRelease = 0;
 
   Decimal32: TMathContext = (Precision: 7; RoundingMode: rmHalfEven);

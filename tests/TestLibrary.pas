@@ -689,8 +689,8 @@ end;
 
 procedure TLibraryTests.TestVersion;
 begin
-  AssertEquals('0.4.0', BigDecimalVersion);
-  AssertEquals('0.4.0', Format('%d.%d.%d', [BigDecimalVersionMajor,
+  AssertEquals('0.5.0', BigDecimalVersion);
+  AssertEquals('0.5.0', Format('%d.%d.%d', [BigDecimalVersionMajor,
     BigDecimalVersionMinor, BigDecimalVersionRelease]));
 end;
 

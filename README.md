@@ -2,7 +2,7 @@
 
 TBigDecimal is an arbitrary-precision decimal math library for Object Pascal.
 It targets Free Pascal (FPC). It exposes the `TBigDecimal` type. The current
-version is 0.4.0 (`BigDecimalVersion` in unit `BigDecimal.Types`).
+version is 0.5.0 (`BigDecimalVersion` in unit `BigDecimal.Types`).
 
 `TBigDecimal` is an advanced record. It follows the Java `BigDecimal` type
 in its model and its names. A value is an unscaled integer of any size and a
@@ -128,7 +128,7 @@ make benchbigmul   # large-scale multiplication next to Python decimal
 sh tools/setup-venv.sh && tools/.venv/bin/python tools/genvectors.py 3000
 ```
 
-Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.4.0)
+Lazarus files are in `lazarus/`. The package `TBigDecimal.lpk` (version 0.5.0)
 holds the library units. The projects `RunTests.lpi` (modes Release and Debug), `BenchAll.lpi`,
 `BenchSmall.lpi`, `BenchCompare.lpi`, `BenchBcd.lpi`, `BenchDivMod.lpi`,
 `BenchParseFormat.lpi`, `BenchFinancial.lpi` and `ProfileSmall.lpi`
